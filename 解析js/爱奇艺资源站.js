@@ -3,7 +3,7 @@
 // @description 刮削：支持，弹幕：支持，嗅探：支持，观看记录：支持，广告：菠菜
 // @dependencies: axios
 // @version 1.1.3
-// @downloadURL https://gh-proxy.org/https://github.com/Silent1566/OmniBox-Spider/raw/refs/heads/main/影视/采集/爱奇艺资源站.js
+// @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/%E8%A7%A3%E6%9E%90js/爱奇艺资源站.js
 
 /**
  * ============================================================================
@@ -628,24 +628,7 @@ async function play(params, context) {
 
     const parse = /\.(m3u8|mp4|flv|webm)(\?|$)/i.test(url) ? 0 : 1;
     const header = { "User-Agent": UA, "Referer": `${HOST}/` };
-
-    try {
-      const historyPayload = {
-        vodId: vodId || resourceId || title,
-        title: title || vodId,
-        episode: playId,
-        episodeName: mapping?.episodeName || epName || undefined,
-        episodeNumber: mapping?.episodeNumber != null ? mapping.episodeNumber : undefined,
-        pic: scrapeData?.posterPath ? `https://image.tmdb.org/t/p/w500${scrapeData.posterPath}` : undefined,
-        playUrl: url,
-        playHeader: header
-      };
-      await OmniBox.addPlayHistory(historyPayload);
-    } catch (error) {
-      await OmniBox.log("warn", `[play] 添加观看记录失败: ${error.message}`);
-    }
-
-    return { urls: [{ name: epName || meta.flag || "播放", url }], parse, header, danmaku: Array.isArray(danmaku) ? danmaku : [] };
+return { urls: [{ name: epName || meta.flag || "播放", url }], parse, header, danmaku: Array.isArray(danmaku) ? danmaku : [] };
   } catch (error) {
     await OmniBox.log("error", `play 失败: ${error.message}`);
     return { urls: [], parse: 1, header: { "User-Agent": UA, "Referer": `${HOST}/` }, danmaku: [] };
