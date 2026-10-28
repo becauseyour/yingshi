@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # @name 熊猫聚合
-# @version 1.1.0
+# @version 1.2.0
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/%E7%9B%B4%E6%92%AD%E5%B9%B3%E5%8F%B0/熊猫聚合.py
-# @description PandaLive 聚合源：列表有流才显示；播放时按 uid 重取最新 m3u8+代理（避免 playId 过长/过期）
+# @description PandaLive 聚合源：代理+直链；播放时按 uid 刷新 m3u8
 
 """
 熊猫聚合 — OmniBox v1.0.0
@@ -326,7 +326,7 @@ async def detail(params, context):
         )
 
         episodes = []
-        # playId 只带 uid，播放时再拉最新 m3u8（避免超长/过期签名）
+        # 代理 + 直链；playId 只带 uid，播放时重取最新 m3u8
         if stream or meta:
             order = list(range(len(PROXIES)))
             random.shuffle(order)
@@ -357,19 +357,36 @@ async def detail(params, context):
         return {"list": []}
 
 
+
 async def _fresh_stream(uid):
     """播放前强制重拉 M3U，拿到未过期的 m3u8。"""
     uid = (uid or "").replace("live_", "").strip()
     if not uid:
         return ""
-    # 清缓存再取
     try:
         await OmniBox.setCache("panda_agg_m3u_v1", {"expiresAt": 0, "map": {}})
+        await OmniBox.setCache("panda_agg_list_v1", {"expiresAt": 0, "list": []})
     except Exception:
         pass
     m3u = await _load_m3u()
     meta = m3u.get(uid) or {}
     return str(meta.get("url") or "").strip()
+
+
+def _proxy_url(proxy, stream):
+    """拼接代理；对 query 做必要编码，减少个别房间失败。"""
+    from urllib.parse import quote
+    stream = str(stream or "").strip()
+    if not stream:
+        return ""
+    # 已是完整代理地址则直接返回
+    if "515355.xyz/proxy" in stream:
+        return stream
+    if proxy.endswith("?") or proxy.endswith("&"):
+        return proxy + quote(stream, safe=":/?&=%#._~")
+    if proxy.endswith("/"):
+        return proxy + quote(stream, safe=":/?&=%#._~")
+    return proxy + quote(stream, safe=":/?&=%#._~")
 
 
 async def play(params, context):
@@ -386,7 +403,7 @@ async def play(params, context):
         if "|" in play_id:
             kind, uid = play_id.split("|", 1)
         uid = uid.replace("live_", "").strip()
-        # 兼容旧版 playId 里塞了整段 http 流地址
+        # 兼容旧版：playId 后半段是整段 http
         if uid.startswith("http"):
             stream = uid
             uid = ""
@@ -394,32 +411,30 @@ async def play(params, context):
             stream = await _fresh_stream(uid)
 
         if not stream.startswith("http"):
-            await OmniBox.log("warn", "[熊猫聚合][play] 无流 uid=%s" % uid)
+            await OmniBox.log("warn", "[熊猫聚合][play] 无流 uid=%s" % (uid or play_id))
             return {"urls": [], "parse": 0, "header": HEADERS}
 
         urls = []
-        # 解析代理序号 p0 / 0
-        idx = -1
         if kind == "direct":
-            urls.append({"name": "直链(易403)", "url": stream})
+            urls.append({"name": "直链", "url": stream})
+            # 直链常 403，附带代理作备选
+            for i, pxy in enumerate(PROXIES):
+                urls.append({"name": "代理%s" % (i + 1), "url": _proxy_url(pxy, stream)})
         else:
+            idx = -1
             k = kind[1:] if str(kind).startswith("p") else kind
             try:
                 idx = int(k)
             except Exception:
                 idx = -1
+            ordered = list(range(len(PROXIES)))
             if 0 <= idx < len(PROXIES):
-                urls.append({"name": "代理", "url": PROXIES[idx] + stream})
-            for i, pxy in enumerate(PROXIES):
-                if i == idx:
-                    continue
-                urls.append({"name": "代理%s" % (i + 1), "url": pxy + stream})
-            if not urls:
-                for i, pxy in enumerate(PROXIES, 1):
-                    urls.append({"name": "代理%s" % i, "url": pxy + stream})
+                ordered = [idx] + [i for i in ordered if i != idx]
+            for i in ordered:
+                urls.append({"name": "代理%s" % (i + 1), "url": _proxy_url(PROXIES[i], stream)})
 
         await OmniBox.log(
-            "info", "[熊猫聚合][play] uid=%s n=%s" % (uid or "-", len(urls))
+            "info", "[熊猫聚合][play] uid=%s proxies=%s" % (uid or "-", len(urls))
         )
         return {
             "urls": urls,
