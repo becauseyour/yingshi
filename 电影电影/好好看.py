@@ -1,19 +1,16 @@
 # -*- coding: utf-8 -*-
 # @name 好好看
-# @version 1.0.0
+# @version 1.1.0
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/%E7%94%B5%E5%BD%B1%E7%94%B5%E8%A7%86/好好看.py
-# @description 好好看影视（hhkan 多镜像）：列表/搜索/详情/播放，自动切换可用官网
+# @description 好好看影视（hhkan 多镜像）：电影/连续剧/Netflix/综艺/动漫/短剧，首页聚合热门
 
 """
-好好看 — OmniBox v1.0.0
+好好看 — OmniBox v1.1.0
 
-最新官网镜像:
-  www.hhkan1.com / www.hhkan2.com / www.hhkan3.com / www.hhkan4.com
-说明:
-  - 自动探测可用域名并缓存
-  - 分类: 电影 / 剧集 / 综艺 / 动漫 / 短剧（按站内 id，失败时仍可搜索）
-  - 播放优先解析 player_aaaa → m3u8/mp4；否则回落网页 parse=1
-  - 若遇 CDN 人机验证，请在可打开官网的网络下使用
+官网镜像: www.hhkan0.com ~ www.hhkan4.com
+分类对齐站内导航: 电影 / 连续剧 / Netflix / 综艺 / 动漫 / 短剧
+首页: 解析首页卡片；若为空则聚合各分类第一页热门
+播放: player_aaaa → m3u8/mp4；失败 parse=1
 """
 
 import json
@@ -24,11 +21,11 @@ from urllib.parse import quote, urljoin
 from spider_runner import OmniBox, run
 
 HOSTS = [
+    "https://www.hhkan0.com",
     "https://www.hhkan1.com",
     "https://www.hhkan2.com",
     "https://www.hhkan3.com",
     "https://www.hhkan4.com",
-    "https://www.hhkan0.com",
 ]
 HOST = HOSTS[0]
 UA = (
@@ -36,14 +33,25 @@ UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 )
 
-# 常见 MacCMS 分类 id（站点若不同会在 home 时尝试校正）
+# 站内常见 type id（MacCMS 风格；连续剧多为 2，Netflix 多为独立 id）
 CLASSES = [
     {"type_id": "1", "type_name": "电影"},
-    {"type_id": "2", "type_name": "剧集"},
+    {"type_id": "2", "type_name": "连续剧"},
+    {"type_id": "netflix", "type_name": "Netflix"},
     {"type_id": "3", "type_name": "综艺"},
     {"type_id": "4", "type_name": "动漫"},
     {"type_id": "5", "type_name": "短剧"},
 ]
+
+# Netflix / 连续剧 备用路径关键字
+_CATE_SLUG = {
+    "1": ["1", "dianying", "movie"],
+    "2": ["2", "lianxuju", "tv", "dianshiju"],
+    "netflix": ["netflix", "6", "20", "21"],
+    "3": ["3", "zongyi"],
+    "4": ["4", "dongman", "anime"],
+    "5": ["5", "duanju", "short"],
+}
 
 
 def _page(v):
@@ -89,9 +97,8 @@ async def _req(url, referer=None):
 
 
 async def _ensure_host():
-    """轮询镜像，选一个能返回正常页面的。"""
     global HOST
-    cache_key = "hhkan_host_v1"
+    cache_key = "hhkan_host_v11"
     try:
         cached = await OmniBox.getCache(cache_key)
         if isinstance(cached, dict) and cached.get("host"):
@@ -103,18 +110,16 @@ async def _ensure_host():
     for h in HOSTS:
         try:
             st, text, final = await _req(h + "/", referer=h + "/")
-            # CDN 人机验证页通常很短且含 cdndefend / verifying
             if st and st >= 400:
                 continue
             if "cdndefend" in text or "verifying your browser" in text.lower():
-                continue
+                # 部分环境 JS 挑战后仍可解析，若正文很长继续用
+                if len(text) < 2000:
+                    continue
             if len(text) < 800:
                 continue
-            HOST = h if "hhkan" in final else final.rstrip("/")
-            # 若跳到别的 hhkan 域名也接受
             m = re.search(r"https?://(?:www\.)?hhkan\d*\.com", final)
-            if m:
-                HOST = m.group(0)
+            HOST = m.group(0) if m else h
             try:
                 await OmniBox.setCache(
                     cache_key, {"expiresAt": int(time.time()) + 300, "host": HOST}
@@ -131,112 +136,152 @@ async def _ensure_host():
 
 
 def _parse_cards(html):
-    """从列表页提取影片卡片。"""
     cards = []
     seen = set()
-    # 链到 detail 的条目
-    for m in re.finditer(
-        r'href="((?:https?://[^"]+)?/(?:index\.php/)?vod/(?:detail|play)/id/(\d+)[^"]*)"[^>]*>',
-        html,
-        re.I,
-    ):
-        href, vid = m.group(1), m.group(2)
-        if vid in seen:
-            continue
-        # 向后看一小段取标题和图片
-        tail = html[m.end() : m.end() + 400]
-        title = ""
-        tm = re.search(r'title="([^"]+)"', tail) or re.search(
-            r"<h\d[^>]*>\s*([^<]+)", tail
-        )
-        if tm:
-            title = tm.group(1).strip()
-        if not title:
-            tm = re.search(r'alt="([^"]+)"', tail)
-            if tm:
-                title = tm.group(1).strip()
-        pic = ""
-        pm = re.search(
-            r'(?:data-original|data-src|src)=["\']([^"\']+\.(?:jpg|jpeg|png|webp)[^"\']*)',
-            tail,
-            re.I,
-        )
-        if pm:
-            pic = pm.group(1)
-        remarks = ""
-        rm = re.search(
-            r'class="[^"]*(?:pic-text|text-right|remarks|v_note)[^"]*"[^>]*>([^<]+)',
-            tail,
-            re.I,
-        )
-        if rm:
-            remarks = rm.group(1).strip()
-        if not title:
-            continue
+
+    def add(vid, title, pic="", remarks=""):
+        vid = str(vid or "").strip()
+        title = re.sub(r"\s+", " ", str(title or "")).strip()
+        if not vid or not title or vid in seen:
+            return
+        if title in ("查看更多", "更多", "首页", "电影", "连续剧"):
+            return
         seen.add(vid)
         cards.append(
             {
                 "vod_id": vid,
                 "vod_name": title,
                 "vod_pic": _abs(pic),
-                "vod_remarks": remarks,
+                "vod_remarks": remarks.strip(),
             }
         )
-    # 补充：mac 主题 module-item
-    if len(cards) < 5:
-        for m in re.finditer(
-            r'class="[^"]*module-item[^"]*"[\s\S]{0,600}?href="[^"]*?/id/(\d+)[^"]*"[\s\S]{0,400}?alt="([^"]+)"',
-            html,
-            re.I,
+
+    # A. detail / play 链接 + 邻近标题/图
+    for m in re.finditer(
+        r'href="((?:https?://[^"]+)?/(?:index\.php/)?vod/(?:detail|play)/id/(\d+)[^"]*)"',
+        html,
+        re.I,
+    ):
+        vid = m.group(2)
+        window = html[max(0, m.start() - 200) : m.end() + 500]
+        title = ""
+        for pat in (
+            r'title="([^"]{2,80})"',
+            r'alt="([^"]{2,80})"',
+            r"<h[1-6][^>]*>\s*([^<]{2,80})",
+            r'class="[^"]*title[^"]*"[^>]*>\s*([^<]{2,80})',
         ):
-            vid, title = m.group(1), m.group(2).strip()
-            if vid in seen or not title:
-                continue
-            seen.add(vid)
-            block = m.group(0)
-            pic = ""
-            pm = re.search(
-                r'(?:data-original|data-src|src)=["\']([^"\']+)', block, re.I
-            )
-            if pm:
-                pic = pm.group(1)
-            cards.append(
-                {
-                    "vod_id": vid,
-                    "vod_name": title,
-                    "vod_pic": _abs(pic),
-                    "vod_remarks": "",
-                }
-            )
+            tm = re.search(pat, window, re.I)
+            if tm:
+                title = tm.group(1).strip()
+                break
+        pic = ""
+        pm = re.search(
+            r'(?:data-original|data-src|src)=["\']([^"\']+\.(?:jpg|jpeg|png|webp)[^"\']*)',
+            window,
+            re.I,
+        )
+        if pm:
+            pic = pm.group(1)
+        remarks = ""
+        for rp in (
+            r"豆瓣[:：]?\s*([\d.]+)",
+            r'class="[^"]*(?:pic-text|text-right|remarks|v_note|module-item-note)[^"]*"[^>]*>([^<]+)',
+            r"(更新至[^<]{1,20}|全\d+集|正片|HD|抢先)",
+        ):
+            rm = re.search(rp, window, re.I)
+            if rm:
+                remarks = rm.group(1).strip()
+                break
+        add(vid, title, pic, remarks)
+
+    # B. module-item / public-list-box 卡片
+    for block in re.finditer(
+        r'class="[^"]*(?:module-item|public-list-box|vodlist_item|myui-vodlist__box)[^"]*"[\s\S]{0,900}',
+        html,
+        re.I,
+    ):
+        chunk = block.group(0)
+        im = re.search(r"/id/(\d+)", chunk)
+        if not im:
+            continue
+        vid = im.group(1)
+        title = ""
+        tm = re.search(r'(?:title|alt)="([^"]{2,80})"', chunk)
+        if tm:
+            title = tm.group(1)
+        pic = ""
+        pm = re.search(
+            r'(?:data-original|data-src|src)=["\']([^"\']+)', chunk, re.I
+        )
+        if pm:
+            pic = pm.group(1)
+        remarks = ""
+        rm = re.search(
+            r'class="[^"]*(?:pic-text|module-item-note|text-right)[^"]*"[^>]*>([^<]+)',
+            chunk,
+            re.I,
+        )
+        if rm:
+            remarks = rm.group(1)
+        add(vid, title, pic, remarks)
+
+    # C. JSON 嵌入
+    for jm in re.finditer(
+        r'\{\s*"vod_id"\s*:\s*(\d+)\s*,\s*"vod_name"\s*:\s*"([^"]+)"[^\}]{0,400}\}',
+        html,
+    ):
+        pic = ""
+        pm = re.search(r'"vod_pic"\s*:\s*"([^"]+)"', jm.group(0))
+        if pm:
+            pic = pm.group(1).replace("\\/", "/")
+        remarks = ""
+        rm = re.search(r'"vod_remarks"\s*:\s*"([^"]*)"', jm.group(0))
+        if rm:
+            remarks = rm.group(1)
+        add(jm.group(1), jm.group(2), pic, remarks)
+
     return cards
 
 
-def _list_url(tid, page):
-    # 多种常见路径，_get_list 里依次尝试
-    return [
-        "%s/index.php/vod/show/id/%s/page/%s.html" % (HOST, tid, page),
-        "%s/vod/show/id/%s/page/%s.html" % (HOST, tid, page),
-        "%s/index.php/vodtype/%s-%s.html" % (HOST, tid, page),
-        "%s/vodtype/%s-%s.html" % (HOST, tid, page),
-        "%s/index.php/vod/type/id/%s/page/%s.html" % (HOST, tid, page),
-    ]
+def _list_urls(tid, page):
+    keys = _CATE_SLUG.get(str(tid), [str(tid)])
+    urls = []
+    for k in keys:
+        urls.extend(
+            [
+                "%s/index.php/vod/show/id/%s/page/%s.html" % (HOST, k, page),
+                "%s/vod/show/id/%s/page/%s.html" % (HOST, k, page),
+                "%s/index.php/vodtype/%s-%s.html" % (HOST, k, page),
+                "%s/vodtype/%s-%s.html" % (HOST, k, page),
+                "%s/index.php/vod/type/id/%s/page/%s.html" % (HOST, k, page),
+                "%s/index.php/vod/show/class/%s/page/%s.html" % (HOST, quote(str(k)), page),
+            ]
+        )
+    # Netflix 文本分类
+    if str(tid) == "netflix":
+        urls[0:0] = [
+            "%s/index.php/vod/show/class/Netflix/page/%s.html" % (HOST, page),
+            "%s/vod/show/class/Netflix/page/%s.html" % (HOST, page),
+            "%s/index.php/label/netflix.html" % HOST,
+        ]
+    return urls
 
 
-def _search_url(keyword, page):
+def _search_urls(keyword, page):
     q = quote(keyword)
     return [
         "%s/index.php/vod/search/page/%s/wd/%s.html" % (HOST, page, q),
         "%s/vod/search/page/%s/wd/%s.html" % (HOST, page, q),
         "%s/index.php/vod/search/wd/%s/page/%s.html" % (HOST, q, page),
-        "%s/index.php/ajax/suggest?mid=1&wd=%s&limit=20" % (HOST, q),
+        "%s/index.php/ajax/suggest?mid=1&wd=%s&limit=30" % (HOST, q),
     ]
 
 
-def _detail_url(vid):
+def _detail_urls(vid):
     return [
         "%s/index.php/vod/detail/id/%s.html" % (HOST, vid),
         "%s/vod/detail/id/%s.html" % (HOST, vid),
-        "%s/index.php/vod/play/id/%s/sid/1/nid/1.html" % (HOST, vid),
     ]
 
 
@@ -245,10 +290,10 @@ async def _get_html(urls):
     for url in urls:
         try:
             st, text, _ = await _req(url)
-            if "cdndefend" in text or "verifying your browser" in text.lower():
-                last = text
+            if st and st >= 400 and st != 850:
                 continue
-            if st and st >= 400:
+            if "cdndefend" in text and len(text) < 2000:
+                last = text
                 continue
             if len(text) > 500:
                 return text
@@ -261,10 +306,19 @@ async def _get_html(urls):
 async def home(params, context):
     try:
         await _ensure_host()
-        html = await _get_html([HOST + "/", HOST + "/index.php"])
-        cards = _parse_cards(html)[:48]
+        html = await _get_html([HOST + "/", HOST + "/index.php", HOST + "/index.html"])
+        cards = _parse_cards(html)
+        # 首页若无卡片（SPA/懒加载），聚合电影+连续剧第一页
+        if len(cards) < 8:
+            for tid in ("1", "2", "netflix"):
+                more = _parse_cards(await _get_html(_list_urls(tid, 1)))
+                for c in more:
+                    if c["vod_id"] not in {x["vod_id"] for x in cards}:
+                        cards.append(c)
+                if len(cards) >= 36:
+                    break
         await OmniBox.log("info", "[好好看][home] host=%s n=%s" % (HOST, len(cards)))
-        return {"class": CLASSES, "list": cards, "filters": {}}
+        return {"class": CLASSES, "list": cards[:48], "filters": {}}
     except Exception as e:
         await OmniBox.log("error", "[好好看][home] %s" % e)
         return {"class": CLASSES, "list": [], "filters": {}}
@@ -280,7 +334,7 @@ async def category(params, context):
     page = _page((params or {}).get("page") or (params or {}).get("pg") or 1)
     try:
         await _ensure_host()
-        html = await _get_html(_list_url(tid, page))
+        html = await _get_html(_list_urls(tid, page))
         cards = _parse_cards(html)
         pagecount = page + (1 if len(cards) >= 12 else 0)
         await OmniBox.log(
@@ -311,11 +365,10 @@ async def search(params, context):
     try:
         await _ensure_host()
         cards = []
-        for url in _search_url(key, page):
+        for url in _search_urls(key, page):
             st, text, _ = await _req(url)
-            if not text or "cdndefend" in text:
+            if not text or ("cdndefend" in text and len(text) < 2000):
                 continue
-            # suggest json
             if "ajax/suggest" in url or text.strip().startswith("{"):
                 try:
                     data = json.loads(text)
@@ -350,9 +403,7 @@ async def search(params, context):
 
 
 def _parse_play_sources(html, vid):
-    """解析详情页线路与剧集。"""
     sources = []
-    # 1) 经典 MacCMS: vod_play_from / vod_play_url 隐域
     from_m = re.search(
         r'(?:id|name)=["\']vod_play_from["\'][^>]*value=["\']([^"\']+)', html, re.I
     )
@@ -378,30 +429,23 @@ def _parse_play_sources(html, vid):
                     name, u = part.split("$", 1)
                 else:
                     name, u = "第%s集" % (j + 1), part
-                eps.append(
-                    {
-                        "name": name.strip() or ("第%s集" % (j + 1)),
-                        "playId": "%s|%s|%s" % (vid, i + 1, j + 1)
-                        if not u.startswith("http")
-                        else u,
-                    }
-                )
-                # 直链写进 playId 前缀 url:
                 if u.startswith("http"):
-                    eps[-1]["playId"] = "url|" + u
+                    pid = "url|" + u
+                else:
+                    pid = "%s|%s|%s" % (vid, i + 1, j + 1)
+                eps.append({"name": (name or ("第%s集" % (j + 1))).strip(), "playId": pid})
             if eps:
                 sources.append({"name": flag.strip() or ("线路%s" % (i + 1)), "episodes": eps})
 
-    # 2) 播放列表链接 /vod/play/id/xx/sid/a/nid/b
     if not sources:
         by_sid = {}
         for m in re.finditer(
-            r'href="((?:https?://[^"]+)?/(?:index\.php/)?vod/play/id/%s/sid/(\d+)/nid/(\d+)[^"]*)"[^>]*>([^<]+)'
+            r'href="[^"]*?/vod/play/id/%s/sid/(\d+)/nid/(\d+)[^"]*"[^>]*>([^<]+)'
             % re.escape(str(vid)),
             html,
             re.I,
         ):
-            sid, nid, name = m.group(2), m.group(3), m.group(4).strip()
+            sid, nid, name = m.group(1), m.group(2), m.group(3).strip()
             by_sid.setdefault(sid, []).append(
                 {"name": name or ("第%s集" % nid), "playId": "%s|%s|%s" % (vid, sid, nid)}
             )
@@ -410,10 +454,7 @@ def _parse_play_sources(html, vid):
 
     if not sources:
         sources.append(
-            {
-                "name": "默认",
-                "episodes": [{"name": "播放", "playId": "%s|1|1" % vid}],
-            }
+            {"name": "默认", "episodes": [{"name": "播放", "playId": "%s|1|1" % vid}]}
         )
     return sources
 
@@ -427,7 +468,7 @@ async def detail(params, context):
         return {"list": []}
     try:
         await _ensure_host()
-        html = await _get_html(_detail_url(vid))
+        html = await _get_html(_detail_urls(vid))
         title = ""
         tm = re.search(r"<h1[^>]*>\s*([^<]+)", html) or re.search(
             r'property="og:title"\s+content="([^"]+)"', html
@@ -435,13 +476,7 @@ async def detail(params, context):
         if tm:
             title = tm.group(1).strip()
         pic = ""
-        pm = re.search(
-            r'property="og:image"\s+content="([^"]+)"', html
-        ) or re.search(
-            r'class="[^"]*(?:detail|vod)[^"]*"[^>]*>[\s\S]{0,200}?(?:data-original|src)="([^"]+)"',
-            html,
-            re.I,
-        )
+        pm = re.search(r'property="og:image"\s+content="([^"]+)"', html)
         if pm:
             pic = _abs(pm.group(1))
         content = ""
@@ -473,26 +508,16 @@ async def detail(params, context):
 
 
 async def play(params, context):
-    play_id = str(
-        (params or {}).get("playId")
-        or (params or {}).get("id")
-        or ""
-    ).strip()
+    play_id = str((params or {}).get("playId") or (params or {}).get("id") or "").strip()
     headers = {"User-Agent": UA, "Referer": HOST + "/"}
     if not play_id:
         return {"urls": [], "parse": 0, "header": headers}
     try:
         await _ensure_host()
-        # url|https://...
         if play_id.startswith("url|"):
             u = play_id[4:]
             parse = 0 if re.search(r"\.(m3u8|mp4)(\?|$)", u, re.I) else 1
-            return {
-                "urls": [{"name": "播放", "url": u}],
-                "parse": parse,
-                "header": headers,
-            }
-        # 直链
+            return {"urls": [{"name": "播放", "url": u}], "parse": parse, "header": headers}
         if play_id.startswith("http"):
             parse = 0 if re.search(r"\.(m3u8|mp4)(\?|$)", play_id, re.I) else 1
             return {
@@ -510,7 +535,6 @@ async def play(params, context):
             "%s/vod/play/id/%s/sid/%s/nid/%s.html" % (HOST, vid, sid, nid),
         ]
         html = await _get_html(play_urls)
-        # player_aaaa
         m = re.search(r"player_aaaa\s*=\s*(\{[\s\S]*?\})\s*;?\s*</script>", html)
         if not m:
             m = re.search(r"var\s+player_[a-zA-Z0-9]+\s*=\s*(\{[\s\S]*?\})\s*;", html)
@@ -519,7 +543,6 @@ async def play(params, context):
                 info = json.loads(m.group(1))
                 u = str(info.get("url") or "").strip()
                 if u:
-                    # url 可能 base64
                     if info.get("encrypt") in (1, "1", 2, "2") and not u.startswith("http"):
                         try:
                             import base64
@@ -534,16 +557,14 @@ async def play(params, context):
                     parse = 0 if re.search(r"\.(m3u8|mp4)(\?|$)", u, re.I) else int(
                         info.get("parse") or 0
                     )
-                    await OmniBox.log("info", "[好好看][play] got url parse=%s" % parse)
                     return {
                         "urls": [{"name": "播放", "url": u}],
-                        "parse": parse if parse in (0, 1) else 0,
+                        "parse": 0 if parse == 0 else 1,
                         "header": headers,
                     }
             except Exception as e:
                 await OmniBox.log("warn", "[好好看][play] json %s" % e)
 
-        # 页面内 m3u8
         mm = re.search(r'(https?://[^"\'\s]+\.m3u8[^"\'\s]*)', html)
         if mm:
             return {
@@ -552,7 +573,6 @@ async def play(params, context):
                 "header": headers,
             }
 
-        # 回落播放页
         return {
             "urls": [{"name": "网页", "url": play_urls[0]}],
             "parse": 1,
