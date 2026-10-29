@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 # @name 咖啡直播
-# @version 1.0.0
+# @version 1.1.0
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/%E7%9B%B4%E6%92%AD%E5%B9%B3%E5%8F%B0/咖啡直播.py
-# @description 体育赛事直播+录像回放（足球/篮球/NBA）；直播仅展示在线房间
+# @description 体育赛事直播+录像回放；直播仅展示在线房间；OmniBox vod_play_sources
 
 """
-咖啡直播 — OmniBox v1.0.0
+咖啡直播 — OmniBox v1.1.0
 站点: https://kafeizhibo.com
 直播: GET /api/v1/archor  详情 /api/v1/room/{room_id}
 录像: GET /api/v1/recordings  详情 /api/v1/match/{id}/recordings
@@ -72,7 +72,6 @@ async def _get_json(path, referer=None, params=None):
 
 
 def _parse_live_list(items, category_filter=None):
-    """仅 status online 的房间；按 room_id 去重。"""
     seen = set()
     result = []
     for item in items or []:
@@ -81,10 +80,8 @@ def _parse_live_list(items, category_filter=None):
         if category_filter is not None and item.get("category") != category_filter:
             continue
         status = str(item.get("status") or "").lower()
-        if status and status not in ("online", "1", "live", "on"):
-            # 列表接口本身是在播频道，无 status 也保留
-            if status in ("offline", "off", "0", "end"):
-                continue
+        if status in ("offline", "off", "0", "end"):
+            continue
         room_id = str(item.get("room_id") or "").strip()
         if not room_id or room_id in seen:
             continue
@@ -134,7 +131,7 @@ def _parse_video_list(items):
             pic = item.get("home_team_logo") or ""
         result.append(
             {
-                "vod_id": str(mid),
+                "vod_id": "rec_%s" % mid,
                 "vod_name": title,
                 "vod_pic": pic,
                 "vod_remarks": "%s | %s | %s个录像"
@@ -160,38 +157,39 @@ async def _detail_live(room_id):
     title = "%s vs %s (%s)" % (home, away, league) if (home or away) else ("直播 %s" % room_id)
     teams = d.get("teams") or {}
     pic = ((teams.get("home") or {}).get("logo")) or ""
+
     episodes = []
     for sig in signals:
         url = (sig.get("stream_url") or "").strip()
         if url:
-            episodes.append("%s$%s" % (sig.get("name") or "线路", url))
+            episodes.append({"name": sig.get("name") or "线路", "playId": url})
     if not episodes:
         archor = d.get("archor") or {}
         url = (archor.get("stream_url") or "").strip()
         if url:
-            episodes.append("%s$%s" % (archor.get("name") or "直播", url))
+            episodes.append({"name": archor.get("name") or "直播", "playId": url})
     if not episodes:
         return {"list": []}
+
     vod = {
         "vod_id": "live_%s" % room_id,
         "vod_name": "🔴 " + title,
         "vod_pic": pic,
         "vod_content": "%s %s vs %s 比分 %s-%s"
         % (league, home, away, room_info.get("home_score", 0), room_info.get("away_score", 0)),
-        "vod_play_from": "直播线路",
-        "vod_play_url": "#".join(episodes),
+        "vod_play_sources": [{"name": "直播线路", "episodes": episodes}],
     }
     return {"list": [vod]}
 
 
-async def _detail_recording(vid):
+async def _detail_recording(mid):
     data = await _get_json(
-        "/api/v1/match/%s/recordings" % vid,
+        "/api/v1/match/%s/recordings" % mid,
         referer=HOST + "/pc/replay",
     )
     if data.get("code") != 200 or not data.get("data"):
         return {"list": []}
-    match = (data["data"].get("match") or {})
+    match = data["data"].get("match") or {}
     replays = data["data"].get("replays") or []
     highlights = data["data"].get("highlights") or []
     title = "%s vs %s (%s)" % (
@@ -204,15 +202,19 @@ async def _detail_recording(vid):
     for idx, rec in enumerate(replays):
         url = (rec.get("video_url") or "").strip()
         if url:
-            episodes.append("%s$%s" % (rec.get("title") or ("录像%s" % (idx + 1)), url))
+            episodes.append(
+                {"name": rec.get("title") or ("录像%s" % (idx + 1)), "playId": url}
+            )
     for idx, rec in enumerate(highlights):
         url = (rec.get("video_url") or "").strip()
         if url:
-            episodes.append("%s$%s" % (rec.get("title") or ("集锦%s" % (idx + 1)), url))
+            episodes.append(
+                {"name": rec.get("title") or ("集锦%s" % (idx + 1)), "playId": url}
+            )
     if not episodes:
         return {"list": []}
     vod = {
-        "vod_id": str(vid),
+        "vod_id": "rec_%s" % mid,
         "vod_name": title,
         "vod_pic": pic,
         "vod_content": "%s %s vs %s 比分 %s-%s 时间 %s"
@@ -224,8 +226,7 @@ async def _detail_recording(vid):
             match.get("away_score", 0),
             match.get("start_time") or "",
         ),
-        "vod_play_from": "录像源",
-        "vod_play_url": "#".join(episodes),
+        "vod_play_sources": [{"name": "录像源", "episodes": episodes}],
     }
     return {"list": [vod]}
 
@@ -306,7 +307,11 @@ async def detail(params, context):
     try:
         if vid.startswith("live_"):
             return await _detail_live(vid[5:])
-        return await _detail_recording(vid)
+        if vid.startswith("rec_"):
+            return await _detail_recording(vid[4:])
+        if vid.isdigit():
+            return await _detail_recording(vid)
+        return await _detail_live(vid)
     except Exception as e:
         await OmniBox.log("error", "[detail] %s" % e)
         return {"list": []}
@@ -331,13 +336,15 @@ async def search(params, context):
                 room_id = str(item.get("room_id") or "")
                 if not room_id:
                     continue
-                home = item.get("home_team") or ""
-                away = item.get("away_team") or ""
-                league = item.get("league_name") or ""
                 result.append(
                     {
                         "vod_id": "live_%s" % room_id,
-                        "vod_name": "🔴 %s vs %s (%s)" % (home, away, league),
+                        "vod_name": "🔴 %s vs %s (%s)"
+                        % (
+                            item.get("home_team") or "",
+                            item.get("away_team") or "",
+                            item.get("league_name") or "",
+                        ),
                         "vod_pic": "",
                         "vod_remarks": "直播中",
                     }
@@ -360,7 +367,7 @@ async def search(params, context):
                     continue
                 result.append(
                     {
-                        "vod_id": str(item.get("match_id")),
+                        "vod_id": "rec_%s" % item.get("match_id"),
                         "vod_name": "%s vs %s (%s)"
                         % (
                             item.get("home_team") or "",
@@ -378,29 +385,46 @@ async def search(params, context):
 
 
 async def play(params, context):
-    """播放地址已在 detail 的 vod_play_url 中，这里直接回传。"""
-    url = str((params or {}).get("url") or (params or {}).get("flag") or "").strip()
-    # OmniBox 有时把集数名后的真实地址放在 url / playUrl
-    play_url = str(
-        (params or {}).get("playUrl")
+    play_id = str(
+        (params or {}).get("playId")
         or (params or {}).get("url")
         or (params or {}).get("id")
         or ""
     ).strip()
-    if "$" in play_url:
-        play_url = play_url.split("$", 1)[-1]
-    if not play_url.startswith("http"):
-        play_url = url if url.startswith("http") else play_url
-    header = {
+    headers = {
         "User-Agent": UA,
         "Referer": HOST + "/",
         "Origin": HOST,
     }
-    return {
-        "parse": 0,
-        "url": play_url,
-        "header": header,
-    }
+    if not play_id:
+        return {"urls": [], "parse": 0, "header": headers}
+
+    if play_id.startswith("http"):
+        return {
+            "urls": [{"name": "播放", "url": play_id}],
+            "parse": 0,
+            "header": headers,
+        }
+
+    if play_id.startswith("live_"):
+        room_id = play_id[5:]
+        data = await _get_json(
+            "/api/v1/room/%s" % room_id,
+            referer=HOST + "/room/%s" % room_id,
+        )
+        d = (data or {}).get("data") or {}
+        urls = []
+        for sig in d.get("signals") or []:
+            u = (sig.get("stream_url") or "").strip()
+            if u:
+                urls.append({"name": sig.get("name") or "线路", "url": u})
+        if not urls:
+            u = ((d.get("archor") or {}).get("stream_url") or "").strip()
+            if u:
+                urls.append({"name": "直播", "url": u})
+        return {"urls": urls, "parse": 0, "header": headers}
+
+    return {"urls": [], "parse": 0, "header": headers}
 
 
 if __name__ == "__main__":
