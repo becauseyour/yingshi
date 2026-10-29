@@ -1,37 +1,23 @@
 # -*- coding: utf-8 -*-
 # @name 直播录屏
-# @version 1.0.0
+# @version 1.1.0
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/18plus/直播录屏.py
-# @description lookluping 免费直播回放；列表 HTML + /e/moyublog/bofang + DownSys 取 m3u8
-
-"""
-直播录屏 — OmniBox v1.0.0
-站点: https://www.lookluping.xyz
-列表: /free/  /free/index_N.html
-播放: POST /e/moyublog/bofang/ → iframe → /e/DownSys/play/ 解析 m3u8
-"""
+# @description lookluping 免费直播回放；OmniBox vod_play_sources
 
 import json
 import re
 from urllib.parse import urlencode
-
 from spider_runner import OmniBox, run
 
 HOST = "https://www.lookluping.xyz"
-UA = (
-    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-)
-
+UA = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 CLASSES = [{"type_id": "free", "type_name": "免费视频"}]
-
 
 def _to_int(v, default=0):
     try:
         return int(float(v)) if isinstance(v, str) else int(v)
     except (ValueError, TypeError):
         return default
-
 
 async def _fetch(path, method="GET", form=None):
     url = path if str(path).startswith("http") else HOST + path
@@ -49,7 +35,6 @@ async def _fetch(path, method="GET", form=None):
     res = await OmniBox.request(url, opts)
     return res.get("body") or ""
 
-
 def _wrap_pic(pic):
     if not pic:
         return ""
@@ -60,13 +45,10 @@ def _wrap_pic(pic):
         pic = HOST + (pic if pic.startswith("/") else "/" + pic)
     return pic
 
-
 def _items(html):
-    items = []
-    seen = set()
+    items, seen = [], set()
     for m in re.finditer(r'<a href="([^"]*?/(\d+)\.html)"([^>]*)>(.*?)</a>', html or "", re.S):
-        path = m.group(1).strip()
-        vid = m.group(2)
+        path, vid = m.group(1).strip(), m.group(2)
         if "/free/" not in path and not path.startswith("free/"):
             continue
         if vid in seen:
@@ -76,23 +58,13 @@ def _items(html):
         if not name or len(name) > 120:
             continue
         seen.add(vid)
-        after = (html or "")[m.end() : m.end() + 800]
+        after = (html or "")[m.end(): m.end() + 800]
         img = re.search(r'<img[^>]+(?:data-original|original|src)="([^"]+)"', after)
-        pic = _wrap_pic(img.group(1) if img else "")
-        # vod_id 用 free/12345 便于拼详情
         clean = path.lstrip("/").replace(".html", "")
         if not clean.startswith("free/"):
             clean = "free/" + vid
-        items.append(
-            {
-                "vod_id": clean,
-                "vod_name": name[:60],
-                "vod_pic": pic,
-                "vod_remarks": "",
-            }
-        )
+        items.append({"vod_id": clean, "vod_name": name[:60], "vod_pic": _wrap_pic(img.group(1) if img else ""), "vod_remarks": ""})
     return items
-
 
 def _pagecount(html, pn=1):
     pages = [int(x) for x in re.findall(r"index_(\d+)\.html", html or "")]
@@ -102,6 +74,28 @@ def _pagecount(html, pn=1):
         return pn + 5
     return pn
 
+async def _resolve_m3u8(path, cid, xid):
+    r = await _fetch("/e/moyublog/bofang/", method="POST", form={"id": xid, "classid": cid})
+    if not r:
+        return ""
+    try:
+        nr = (json.loads(r).get("nr") or "")
+    except Exception:
+        nr = r
+    m = re.search(r'url:\s*["\']([^"\']+)["\']', nr)
+    if m:
+        return m.group(1).replace("\\/", "/")
+    m = re.search(r'src\s*=\s*["\']?\s*\\?(/e/DownSys/play/[^"\']+)', nr)
+    u = m.group(1).replace("\\/", "/").replace(" ", "") if m else ""
+    if not u:
+        u = "/e/DownSys/play/?classid=%s&id=%s&pathid=" % (cid, xid)
+    if u.startswith("/"):
+        u = HOST + u
+    fr = await _fetch(u)
+    m = re.search(r'url:\s*["\']([^"\']+)["\']', fr or "")
+    if not m:
+        m = re.search(r'(https?://[^"\'\s]+\.m3u8[^"\'\s]*)', fr or "")
+    return m.group(1).replace("\\/", "/") if m else ""
 
 async def home(params, context):
     try:
@@ -110,7 +104,6 @@ async def home(params, context):
     except Exception as e:
         await OmniBox.log("error", "[home] %s" % e)
         return {"class": CLASSES, "list": [], "filters": {}}
-
 
 async def category(params, context):
     page = _to_int((params or {}).get("page"), 1) or 1
@@ -121,17 +114,10 @@ async def category(params, context):
             return {"page": page, "pagecount": 1, "limit": 24, "total": 0, "list": []}
         vod_list = _items(html)
         pagecount = _pagecount(html, page)
-        return {
-            "page": page,
-            "pagecount": pagecount,
-            "limit": len(vod_list) or 24,
-            "total": 48 * pagecount,
-            "list": vod_list,
-        }
+        return {"page": page, "pagecount": pagecount, "limit": len(vod_list) or 24, "total": 48 * pagecount, "list": vod_list}
     except Exception as e:
         await OmniBox.log("error", "[category] %s" % e)
         return {"page": 1, "pagecount": 0, "limit": 24, "total": 0, "list": []}
-
 
 async def detail(params, context):
     vid = str((params or {}).get("videoId") or "").strip()
@@ -146,37 +132,30 @@ async def detail(params, context):
             return {"list": []}
         m = re.search(r"<h1[^>]*>([^<]+)</h1>", html)
         name = m.group(1).strip() if m else path
-        m = re.search(r'<img[^>]+src="([^"]*?/video/[^"]+)"', html) or re.search(
-            r'<img[^>]+src="([^"]+)"', html
-        )
+        m = re.search(r'<img[^>]+src="([^"]*?/video/[^"]+)"', html) or re.search(r'<img[^>]+src="([^"]+)"', html)
         pic = _wrap_pic(m.group(1) if m else "")
-        b = re.search(r'buyvideo" classid="(\d+)" xxid="(\d+)"', html) or re.search(
-            r'classid="(\d+)"[^>]*xxid="(\d+)"', html
-        )
+        b = re.search(r'buyvideo" classid="(\d+)" xxid="(\d+)"', html) or re.search(r'classid="(\d+)"[^>]*xxid="(\d+)"', html)
         cid = b.group(1) if b else "26"
         xid = b.group(2) if b else re.search(r"(\d+)", path).group(1)
-        vod = {
+        play_id = "%s|%s|%s" % (path, cid, xid)
+        return {"list": [{
             "vod_id": path,
             "vod_name": name,
             "vod_pic": pic,
             "vod_content": name,
             "type_name": "免费视频",
-            "vod_play_from": "直播录屏",
-            "vod_play_url": "正片$%s|%s|%s" % (path, cid, xid),
-        }
-        return {"list": [vod]}
+            "vod_play_sources": [{"name": "直播录屏", "episodes": [{"name": "正片", "playId": play_id}]}],
+        }]}
     except Exception as e:
         await OmniBox.log("error", "[detail] %s" % e)
         return {"list": []}
-
 
 async def search(params, context):
     key = str((params or {}).get("keyword") or "").strip()
     if not key:
         return {"list": []}
     raw = key.lower()
-    items = []
-    seen = set()
+    items, seen = [], set()
     try:
         for p in range(1, 6):
             url = "/free/" if p == 1 else "/free/index_%d.html" % p
@@ -184,9 +163,7 @@ async def search(params, context):
             if not html or "信息提示" in html[:2000]:
                 break
             for it in _items(html):
-                if raw not in it["vod_name"].lower():
-                    continue
-                if it["vod_id"] in seen:
+                if raw not in it["vod_name"].lower() or it["vod_id"] in seen:
                     continue
                 seen.add(it["vod_id"])
                 items.append(it)
@@ -197,72 +174,30 @@ async def search(params, context):
         await OmniBox.log("error", "[search] %s" % e)
         return {"list": []}
 
-
 async def play(params, context):
-    raw = str(
-        (params or {}).get("playUrl")
-        or (params or {}).get("url")
-        or (params or {}).get("id")
-        or ""
-    ).strip()
-    if "$" in raw:
-        raw = raw.split("$", 1)[-1]
+    play_id = str((params or {}).get("playId") or (params or {}).get("url") or (params or {}).get("id") or "").strip()
+    headers = {"Referer": HOST + "/", "User-Agent": UA}
+    if not play_id:
+        return {"urls": [], "parse": 0, "header": headers}
     try:
-        parts = raw.split("|")
+        if play_id.startswith("http") and (".m3u8" in play_id or ".mp4" in play_id):
+            return {"urls": [{"name": "播放", "url": play_id}], "parse": 0, "header": headers}
+        parts = play_id.split("|")
         if len(parts) >= 3:
             path, cid, xid = parts[0], parts[1], parts[2]
         else:
-            path = raw.strip("/").replace(".html", "")
+            path = play_id.strip("/").replace(".html", "")
             if path.isdigit():
                 path = "free/" + path
             xid = re.search(r"(\d+)", path).group(1)
             cid = "26"
-        # 第一步：bofang 拿 iframe
-        r = await _fetch("/e/moyublog/bofang/", method="POST", form={"id": xid, "classid": cid})
-        if not r:
-            return {"parse": 1, "url": HOST + "/" + path + ".html"}
-        try:
-            obj = json.loads(r)
-            nr = obj.get("nr") or ""
-        except Exception:
-            nr = r
-        m = re.search(r'url:\s*["\']([^"\']+)["\']', nr)
-        if m:
-            return {
-                "parse": 0,
-                "url": m.group(1).replace("\\/", "/"),
-                "header": {"Referer": HOST + "/", "User-Agent": UA},
-            }
-        m = re.search(r'src\s*=\s*["\']?\s*\\?(/e/DownSys/play/[^"\']+)', nr)
-        u = m.group(1).replace("\\/", "/").replace(" ", "") if m else ""
-        if not u:
-            # 直接拼常见路径
-            u = "/e/DownSys/play/?classid=%s&id=%s&pathid=" % (cid, xid)
-        if u.startswith("/"):
-            u = HOST + u
-        fr = await _fetch(u)
-        m = re.search(r'url:\s*["\']([^"\']+)["\']', fr or "")
-        if not m:
-            m = re.search(r'(https?://[^"\'\s]+\.m3u8[^"\'\s]*)', fr or "")
-        if not m:
-            return {"parse": 1, "url": HOST + "/" + path + ".html"}
-        return {
-            "parse": 0,
-            "url": m.group(1).replace("\\/", "/"),
-            "header": {"Referer": HOST + "/", "User-Agent": UA},
-        }
+        m3u8 = await _resolve_m3u8(path, cid, xid)
+        if m3u8:
+            return {"urls": [{"name": "正片", "url": m3u8}], "parse": 0, "header": headers}
+        return {"urls": [], "parse": 0, "header": headers}
     except Exception as e:
         await OmniBox.log("error", "[play] %s" % e)
-        return {"parse": 1, "url": HOST + "/"}
-
+        return {"urls": [], "parse": 0, "header": headers}
 
 if __name__ == "__main__":
-    run(
-        {
-            "home": home,
-            "category": category,
-            "detail": detail,
-            "search": search,
-            "play": play,
-        }
-    )
+    run({"home": home, "category": category, "detail": detail, "search": search, "play": play})
