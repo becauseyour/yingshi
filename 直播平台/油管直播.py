@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # @name 油管直播
-# @version 1.1.0
+# @version 1.1.1
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/%E7%9B%B4%E6%92%AD%E5%B9%B3%E5%8F%B0/油管直播.py
 # @description YouTube 直播；OmniBox vod_play_sources + hlsManifestUrl
 
@@ -240,18 +240,40 @@ async def search(params, context):
 async def play(params, context):
     play_id = str((params or {}).get("playId") or (params or {}).get("url") or (params or {}).get("id") or "").strip()
     video_id = _normalize_vid(play_id)
+    watch = "https://www.youtube.com/watch?v=%s" % video_id if video_id else ""
+    mobile = "https://m.youtube.com/watch?v=%s" % video_id if video_id else ""
     if not video_id:
         return {"urls": [], "parse": 0, "header": HEADERS}
     try:
         data = await _extract_hls(video_id)
         hls = data.get("hls_url") or ""
-        if not hls:
-            await OmniBox.log("warn", "[play] no hls %s status=%s" % (video_id, data.get("status")))
-            return {"urls": [], "parse": 1, "header": HEADERS}
-        return {"urls": [{"name": "直播", "url": hls}], "parse": 0, "header": HEADERS}
+        if hls:
+            return {
+                "urls": [{"name": "HLS直播", "url": hls}],
+                "parse": 0,
+                "header": HEADERS,
+            }
+        # YouTube 风控 LOGIN_REQUIRED / bot 时无 HLS，回落网页给客户端解析
+        await OmniBox.log(
+            "warn",
+            "[play] no hls %s status=%s reason=%s -> webpage"
+            % (video_id, data.get("status"), data.get("reason")),
+        )
+        return {
+            "urls": [
+                {"name": "YouTube网页", "url": watch},
+                {"name": "移动网页", "url": mobile},
+            ],
+            "parse": 1,
+            "header": HEADERS,
+        }
     except Exception as e:
         await OmniBox.log("error", "[play] %s" % e)
-        return {"urls": [], "parse": 0, "header": HEADERS}
+        return {
+            "urls": [{"name": "YouTube网页", "url": watch}] if watch else [],
+            "parse": 1,
+            "header": HEADERS,
+        }
 
 
 if __name__ == "__main__":
