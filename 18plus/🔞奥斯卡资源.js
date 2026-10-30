@@ -40,7 +40,24 @@ const OmniBox = require("omnibox_sdk");
 // ==================== 配置区域 ====================
 // 采集站 API 地址（优先使用环境变量，如果没有则使用默认值）
 // 例如：https://example.com/api.php/provide/vod/
-const SITE_API = process.env.SITE_API || "https://aosikazy.com/api.php/provide/vod";
+// 主站 aosikazy.com 常 418/被墙；备用 aosikazy1~9 可用
+const SITE_API_POOL = (
+  process.env.SITE_API
+    ? [process.env.SITE_API]
+    : [
+        "https://aosikazy1.com/api.php/provide/vod/",
+        "https://aosikazy2.com/api.php/provide/vod/",
+        "https://aosikazy3.com/api.php/provide/vod/",
+        "https://aosikazy4.com/api.php/provide/vod/",
+        "https://aosikazy5.com/api.php/provide/vod/",
+        "https://aosikazy6.com/api.php/provide/vod/",
+        "https://aosikazy7.com/api.php/provide/vod/",
+        "https://aosikazy8.com/api.php/provide/vod/",
+        "https://aosikazy9.com/api.php/provide/vod/",
+        "https://aosikazy.com/api.php/provide/vod/",
+      ]
+);
+const SITE_API = SITE_API_POOL[0];
 
 // 弹幕 API 地址（优先使用环境变量，如果没有则使用默认值）
 // 例如：https://danmu.example.com
@@ -55,38 +72,53 @@ const DANMU_API = process.env.DANMU_API || "";
  * @returns {Promise<Object>} API 响应数据
  */
 async function requestSiteAPI(params = {}) {
-  if (!SITE_API) {
+  const pool = Array.isArray(SITE_API_POOL) && SITE_API_POOL.length
+    ? SITE_API_POOL
+    : [SITE_API].filter(Boolean);
+  if (!pool.length) {
     throw new Error("请配置采集站 API 地址（SITE_API 环境变量）");
   }
 
-  // 构建 URL
-  const url = new URL(SITE_API);
-  Object.keys(params).forEach((key) => {
-    if (params[key] !== undefined && params[key] !== null && params[key] !== "") {
-      url.searchParams.append(key, params[key]);
+  const headers = {
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    Accept: "application/json, text/plain, */*",
+  };
+
+  let lastError = null;
+  for (const base of pool) {
+    try {
+      const url = new URL(base.endsWith("/") || base.includes("?") ? base : base + "/");
+      Object.keys(params).forEach((key) => {
+        if (params[key] !== undefined && params[key] !== null && params[key] !== "") {
+          url.searchParams.append(key, params[key]);
+        }
+      });
+      OmniBox.log("info", `请求采集站: ${url.toString()}`);
+      const response = await OmniBox.request(url.toString(), {
+        method: "GET",
+        headers,
+        timeout: 15,
+      });
+      if (response.statusCode !== 200) {
+        throw new Error(`HTTP ${response.statusCode}`);
+      }
+      const body = (response.body || "").trim();
+      if (!body || body === "closed") {
+        throw new Error("empty body");
+      }
+      const data = JSON.parse(body);
+      if (data && (data.list || data.class || data.code === 1)) {
+        return data;
+      }
+      throw new Error("invalid json payload");
+    } catch (error) {
+      lastError = error;
+      OmniBox.log("warn", `镜像失败 ${base}: ${error.message}`);
     }
-  });
-
-  OmniBox.log("info", `请求采集站: ${url.toString()}`);
-
-  try {
-    const response = await OmniBox.request(url.toString(), {
-      method: "GET",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-      },
-    });
-
-    if (response.statusCode !== 200) {
-      throw new Error(`HTTP ${response.statusCode}: ${response.body}`);
-    }
-
-    const data = JSON.parse(response.body);
-    return data;
-  } catch (error) {
-    OmniBox.log("error", `请求采集站失败: ${error.message}`);
-    throw error;
   }
+  OmniBox.log("error", `请求采集站失败: ${lastError && lastError.message}`);
+  throw lastError || new Error("所有镜像不可用");
 }
 
 /**
@@ -532,11 +564,23 @@ async function category(params) {
 
     OmniBox.log("info", `获取分类数据: categoryId=${categoryId}, page=${page}`);
 
-    const response = await requestSiteAPI({
-      ac: "videolist",
-      t: categoryId,
-      pg: String(page),
-    });
+    let response;
+    try {
+      response = await requestSiteAPI({
+        ac: "videolist",
+        t: categoryId,
+        pg: String(page),
+      });
+    } catch (e) {
+      response = null;
+    }
+    if (!response || !Array.isArray(response.list) || response.list.length === 0) {
+      response = await requestSiteAPI({
+        ac: "list",
+        t: categoryId,
+        pg: String(page),
+      });
+    }
 
     // 格式化视频列表
     const videos = formatVideos(response.list || []);
