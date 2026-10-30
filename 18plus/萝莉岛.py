@@ -1,24 +1,20 @@
 # -*- coding: utf-8 -*-
-import sys, re, json, urllib.parse, os, time
-sys.path.append('..')
-try:
-    from base.spider import Spider as _B
-except ImportError:
-    class _B: pass
-try:
-    import requests
-    from requests.packages.urllib3.exceptions import InsecureRequestWarning
-    requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
-except ImportError:
-    requests = None
+# @name 萝莉岛
+# @version 1.1.0
+# @description 萝莉岛 API 采集；域名池自动切换 OmniBox 适配版
 
-U = "Mozilla/5.0 (Linux; Android 12; TFY-AN00 Build/HONORTFY-AN00; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/92.0.4515.105 Mobile Safari/537.36 uni-app Html5Plus/1.0 (Immersed/33.0)"
+import json
+import re
+from urllib.parse import quote, urlencode
+
+from spider_runner import OmniBox, run
+
+UA = (
+    "Mozilla/5.0 (Linux; Android 12; TFY-AN00) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Version/4.0 Chrome/92.0.4515.105 Mobile Safari/537.36"
+)
 DOMAIN_API = "https://lwncnss3api.cc/api/getapi.php"
-CACHE_FILE = "domain_cache.json"
-CACHE_EXPIRE = 3600  # 缓存有效期1小时
-
-# 硬编码的备用域名列表
-BACKUP_DOMAINS = [
+BACKUP = [
     "dag29jmgma1g.site",
     "ldngksapi.cc",
     "lagh23ksapi.cc",
@@ -27,355 +23,290 @@ BACKUP_DOMAINS = [
     "lwasga289api.cc",
     "lw2wthchhaapi.cc",
     "lwncnss3api.cc",
-    "lw23412gaapi.cc"
+    "lw23412gaapi.cc",
 ]
 
-class Spider(_B):
-    def init(self, e=""):
-        self.s = requests.Session()
-        self.s.headers.update({
-            "User-Agent": U, 
-            "Accept-Encoding": "gzip",
-            "Content-Type": "application/x-www-form-urlencoded"
-        })
-        # 忽略SSL验证
-        self.s.verify = False
-        self.token = ""
-        self.domains = []
-        self.working_domains = []  # 可工作的域名缓存
-        self._load_domains()
-        # 如果获取到的域名少于3个，补充备用域名
-        if len(self.domains) < 3:
-            self.domains.extend(BACKUP_DOMAINS)
-            self.domains = list(set(self.domains))  # 去重
-        self._register()
+# 运行时缓存
+_state = {"domains": list(BACKUP), "base": "", "token": ""}
 
-    def getName(self):
-        return "萝莉岛"
 
-    def isVideoFormat(self, u):
-        return ".m3u8" in u or ".mp4" in u or "preview" in u
+def _to_int(v, default=0):
+    try:
+        return int(float(v)) if isinstance(v, str) else int(v)
+    except (ValueError, TypeError):
+        return default
 
-    def manualVideoCheck(self):
-        return False
 
-    def _get_cache_path(self):
-        """获取缓存文件路径"""
-        return os.path.join(os.path.dirname(__file__), CACHE_FILE)
+def _headers():
+    return {
+        "User-Agent": UA,
+        "Accept": "*/*",
+        "Accept-Encoding": "gzip",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
 
-    def _load_domains(self):
-        """加载域名列表（优先从缓存读取）- 不过滤黑名单"""
-        cache_path = self._get_cache_path()
-        
-        # 尝试从缓存读取
-        if os.path.exists(cache_path):
+
+async def _raw(url, method="GET", data=None):
+    opts = {"method": method, "headers": _headers(), "timeout": 12}
+    if data is not None:
+        opts["body"] = data if isinstance(data, str) else urlencode(data)
+        opts["method"] = "POST"
+    res = await OmniBox.request(url, opts)
+    body = res.get("body") or ""
+    return res.get("statusCode") or 0, body
+
+
+async def _refresh_domains():
+    try:
+        st, body = await _raw(DOMAIN_API)
+        if st == 200 and body:
             try:
-                with open(cache_path, 'r', encoding='utf-8') as f:
-                    cache_data = json.load(f)
-                    cache_time = cache_data.get('cache_time', 0)
-                    # 检查缓存是否过期
-                    if time.time() - cache_time < CACHE_EXPIRE:
-                        domains = cache_data.get('domains', [])
-                        # 不过滤黑名单，直接使用所有域名
-                        self.domains = [d for d in domains if d and isinstance(d, str) and '.' in d]
-                        if self.domains:
-                            print(f'[DOMAIN] Loaded {len(self.domains)} domains from cache (no blacklist filter)')
-                            return
-            except Exception as e:
-                print(f'[CACHE] Read cache failed: {e}')
-        
-        # 缓存失效或不存在，从API获取
-        self._fetch_domains()
+                data = json.loads(body)
+            except Exception:
+                data = {}
+            domains = data.get("data") or []
+            if isinstance(domains, str):
+                try:
+                    domains = json.loads(domains)
+                except Exception:
+                    domains = re.findall(
+                        r"[\w\-.]+\.(?:com|cc|net|org|site|top|xyz)", body
+                    )
+            black = data.get("blackdomain") or []
+            if not isinstance(domains, list):
+                domains = [domains] if domains else []
+            if not isinstance(black, list):
+                black = []
+            all_d = []
+            for d in list(domains) + list(black) + BACKUP:
+                d = str(d).strip().replace("https://", "").replace("http://", "").strip("/")
+                if d and "." in d and d not in all_d:
+                    all_d.append(d)
+            if all_d:
+                _state["domains"] = all_d
+    except Exception as e:
+        await OmniBox.log("warn", "[domain] %s" % e)
 
-    def _fetch_domains(self):
-        """从API获取域名列表并缓存 - 不过滤黑名单，全部轮询"""
-        try:
-            # 使用单独的requests，忽略SSL
-            r = requests.get(DOMAIN_API, timeout=10, verify=False)
-            
-            # 尝试解析JSON
+
+async def _ensure_base():
+    if _state["base"]:
+        return _state["base"]
+    if not _state["domains"]:
+        await _refresh_domains()
+    for d in _state["domains"]:
+        for proto in ("https", "http"):
+            url = "%s://%s/api/setapp.php" % (proto, d)
             try:
-                data = r.json()
-            except:
-                # 如果JSON解析失败，尝试用正则提取域名
-                domains = re.findall(r'[\w\-\.]+\.(?:com|cc|net|org|site|top|xyz)', r.text)
-                if domains:
-                    self.domains = list(set(domains))
-                    print(f'[DOMAIN] Extracted {len(self.domains)} domains from response')
-                    self._save_cache(self.domains, [])
-                    return
-            
-            if data.get('code') == 200:
-                domains = data.get('data', [])
-                blacklist = data.get('blackdomain', [])
-                
-                # 如果data字段是字符串而不是列表，尝试解析
-                if isinstance(domains, str):
-                    try:
-                        domains = json.loads(domains)
-                    except:
-                        domains = [domains]
-                
-                # 确保是列表
-                if not isinstance(domains, list):
-                    domains = [str(domains)] if domains else []
-                
-                # 不过滤黑名单，合并所有域名（data + blacklist）
-                all_domains = list(set(domains + blacklist))  # 合并并去重
-                # 过滤掉空字符串和无效格式
-                self.domains = [d for d in all_domains if d and isinstance(d, str) and '.' in d]
-                
-                # 把 data 里的域名（通常更可靠）放在前面
-                priority_domains = [d for d in domains if d and '.' in d]
-                other_domains = [d for d in self.domains if d not in priority_domains]
-                self.domains = priority_domains + other_domains
-                
-                if self.domains:
-                    print(f'[DOMAIN] Fetched {len(self.domains)} domains from API (no blacklist filter)')
-                    print(f'[DOMAIN] Priority domains: {priority_domains[:5]}...')
-                    self._save_cache(all_domains, [])
-                else:
-                    print('[DOMAIN] No valid domains from API, using backup')
-                    self.domains = BACKUP_DOMAINS.copy()
-            else:
-                print(f'[DOMAIN] API returned: {data}')
-                self.domains = BACKUP_DOMAINS.copy()
-                # 尝试保存备份域名到缓存
-                self._save_cache(self.domains, [])
-        except Exception as e:
-            print(f'[DOMAIN] Fetch failed: {e}')
-            self.domains = BACKUP_DOMAINS.copy()
-            # 尝试保存备份域名到缓存
-            self._save_cache(self.domains, [])
-
-    def _save_cache(self, domains, blacklist):
-        """保存缓存"""
-        try:
-            cache_data = {
-                'domains': domains,
-                'blacklist': blacklist,
-                'cache_time': time.time()
-            }
-            cache_path = self._get_cache_path()
-            with open(cache_path, 'w', encoding='utf-8') as f:
-                json.dump(cache_data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f'[CACHE] Save failed: {e}')
-
-    def _fallback_cache(self):
-        """降级使用缓存（即使过期）- 不过滤黑名单"""
-        cache_path = self._get_cache_path()
-        if os.path.exists(cache_path):
-            try:
-                with open(cache_path, 'r', encoding='utf-8') as f:
-                    cache_data = json.load(f)
-                    domains = cache_data.get('domains', [])
-                    # 不过滤黑名单，直接使用
-                    self.domains = [d for d in domains if d and isinstance(d, str) and '.' in d]
-                    if self.domains:
-                        print(f'[DOMAIN] Using fallback cache with {len(self.domains)} domains')
-                        return
-            except Exception as e:
-                print(f'[DOMAIN] Fallback cache failed: {e}')
-        
-        # 如果还是没有域名，使用备用域名
-        if not self.domains:
-            self.domains = BACKUP_DOMAINS.copy()
-            print('[DOMAIN] Using backup domains')
-
-    def _find_working_domain(self):
-        """找到一个可工作的域名"""
-        # 先尝试之前找到的工作域名
-        if self.working_domains:
-            for domain in self.working_domains[:]:
-                if self._test_domain(domain):
-                    return domain
-                else:
-                    self.working_domains.remove(domain)
-        
-        # 尝试所有域名
-        for domain in self.domains:
-            if self._test_domain(domain):
-                self.working_domains.append(domain)
-                print(f'[DOMAIN] Found working domain: {domain}')
-                return domain
-        
-        print('[DOMAIN] No working domain found')
-        return None
-
-    def _test_domain(self, domain):
-        """测试域名是否可用"""
-        # 优先尝试HTTPS，失败则尝试HTTP
-        for protocol in ['https', 'http']:
-            url = f"{protocol}://{domain}/api/setapp.php"
-            try:
-                r = self.s.get(url, timeout=5, verify=False)
-                if r.status_code == 200:
-                    return True
-            except:
+                st, body = await _raw(url)
+                if st == 200 and body and ("vodtab" in body or "code" in body or "data" in body):
+                    _state["base"] = "%s://%s" % (proto, d)
+                    await OmniBox.log("info", "[base] %s" % _state["base"])
+                    return _state["base"]
+            except Exception:
                 continue
-        return False
+    _state["base"] = "https://%s" % BACKUP[0]
+    return _state["base"]
 
-    def _request_api(self, path, method='post', data=None, params=None):
-        """通用API请求方法，自动轮询域名"""
-        # 先尝试找到工作域名
-        domain = self._find_working_domain()
-        if not domain:
-            # 如果没有工作域名，刷新域名列表
-            self._fetch_domains()
-            domain = self._find_working_domain()
-            if not domain:
-                print(f'[REQUEST] No available domain for {path}')
-                return None
-        
-        # 尝试HTTPS和HTTP
-        for protocol in ['https', 'http']:
-            url = f"{protocol}://{domain}{path}"
+
+async def _api(path, method="GET", data=None, retry=True):
+    base = await _ensure_base()
+    url = base.rstrip("/") + path
+    try:
+        st, body = await _raw(url, method, data)
+        if st == 200 and body:
             try:
-                if method.lower() == 'get':
-                    r = self.s.get(url, params=params, timeout=10, verify=False)
-                else:
-                    r = self.s.post(url, data=data, params=params, timeout=10, verify=False)
-                
-                if r.status_code == 200:
-                    return r
-                else:
-                    print(f'[REQUEST] {url} returned {r.status_code}')
-            except Exception as e:
-                print(f'[REQUEST] {url} failed: {e}')
-                continue
-        
-        # 如果当前域名失败，从工作域名列表中移除并重试
-        if domain in self.working_domains:
-            self.working_domains.remove(domain)
-        return self._request_api(path, method, data, params)
+                return json.loads(body)
+            except Exception:
+                pass
+    except Exception as e:
+        await OmniBox.log("warn", "[api] %s %s" % (path, e))
+    if retry:
+        _state["base"] = ""
+        if base in _state["domains"]:
+            d = base.split("://", 1)[-1]
+            if d in _state["domains"]:
+                _state["domains"].remove(d)
+                _state["domains"].append(d)
+        return await _api(path, method, data, retry=False)
+    return {}
 
-    def _register(self):
-        """注册/获取设备的交互 Token"""
-        try:
-            r = self._request_api('/api/newreg.php', 'post', 
-                data={"device": "android", "ntoken": "", "channel_code": "vbtQg9D8"}
+
+async def _register():
+    if _state["token"]:
+        return
+    data = await _api(
+        "/api/newreg.php",
+        "POST",
+        {"device": "android", "ntoken": "", "channel_code": "vbtQg9D8"},
+    )
+    token = ((data.get("user") or {}).get("token")) or data.get("token") or ""
+    if token:
+        _state["token"] = token
+        await OmniBox.log("info", "[reg] ok")
+    else:
+        await OmniBox.log("warn", "[reg] %s" % (data.get("msg") or "no token"))
+
+
+async def home(params, context):
+    try:
+        await _register()
+        data = await _api("/api/setapp.php", "GET")
+        classes = []
+        filters = {}
+        res_data = data.get("data") if isinstance(data.get("data"), dict) else data
+        tabs = (res_data.get("vodtab") or []) + (res_data.get("vodtaban") or [])
+        for tab in tabs:
+            tid = str(tab.get("type_id") or tab.get("id") or "")
+            name = str(tab.get("type_name") or tab.get("name") or tid)
+            if not tid:
+                continue
+            classes.append({"type_id": tid, "type_name": name})
+            tags = tab.get("vodtags") or tab.get("tags") or []
+            if tags:
+                vals = [{"n": "全部", "v": ""}]
+                for tg in tags:
+                    n = tg.get("name") or tg if isinstance(tg, str) else ""
+                    if n:
+                        vals.append({"n": n, "v": n})
+                filters[tid] = [{"key": "class", "name": "标签", "value": vals}]
+        
+        items = []
+        if classes:
+            lst = await category(
+                {"categoryId": classes[0]["type_id"], "page": 1}, context
             )
-            if r:
-                data = r.json()
-                self.token = data.get("user", {}).get("token", "")
-                if self.token:
-                    print(f'[REGISTER] Success, token: {self.token[:20]}...')
-                else:
-                    print('[REGISTER] No token in response')
-            else:
-                print('[REGISTER] Request failed')
-        except Exception as e:
-            print('[REGISTER]', e)
+            items = (lst or {}).get("list") or []
+        return {"class": classes, "list": items[:30], "filters": filters}
+    except Exception as e:
+        await OmniBox.log("error", "[home] %s" % e)
+        return {"class": [], "list": [], "filters": {}}
 
-    def homeContent(self, filter=False):
-        """获取主分类及其对应的筛选条件"""
-        try:
-            r = self._request_api('/api/setapp.php', 'get')
-            if r:
-                data = r.json()
-                classes = []
-                filters = {}
-                
-                tabs = data.get("vodtab", []) + data.get("vodtaban", [])
-                for tab in tabs:
-                    tid = tab.get("type_id")
-                    classes.append({
-                        "type_id": tid,
-                        "type_name": tab.get("type_name")
-                    })
-                    tags = tab.get("vodtags", [])
-                    if tags:
-                        tag_values = [{"n": "全部", "v": ""}]
-                        for tag in tags:
-                            tag_values.append({"n": tag.get("name"), "v": tag.get("name")})
-                        filters[tid] = [{"key": "class", "name": "标签", "value": tag_values}]
-                
-                return {"class": classes, "filters": filters if filter else {}}
-            
-            return {"class": [], "filters": {}}
-        except Exception as e:
-            print('[HOME]', e)
-            return {"class": [], "filters": {}}
 
-    def homeVideoContent(self):
-        return {"list": []}
-
-    def categoryContent(self, tid, pg=1, filter=False, extend=None):
-        """获取分类子列表"""
-        if not extend: extend = {}
-        num = (int(pg) - 1) * 30
-        payload = {
-            "num": str(num),
-            "pid": str(tid),
-            "area": "全部",
-            "vodclass": extend.get("class", ""),
-            "vodyear": "全部",
-            "sort": "1",
-            "token": self.token
-        }
-        
-        try:
-            r = self._request_api('/api/vlist.php', 'post', data=payload)
-            if r:
-                data = r.json()
-                videos = []
-                for item in data.get("list", []):
-                    videos.append({
-                        "vod_id": str(item.get("vod_id", "")),
-                        "vod_name": item.get("vod_name", ""),
-                        "vod_pic": item.get("vod_pic", ""),
-                        "vod_remarks": item.get("vod_class", "") or item.get("vod_remarks", "")
-                    })
-                return {"list": videos, "page": pg}
-        except Exception as e:
-            print('[CATEGORY]', e)
-        
-        return {"list": []}
-
-    def detailContent(self, ids):
-        """获取视频详情及播放链接"""
-        payload = {
-            "id": str(ids[0]),
-            "token": self.token,
-            "channel": ""
-        }
-        
-        try:
-            r = self._request_api('/api/Get_vod_list.php', 'post', data=payload)
-            if r:
-                data = r.json().get("data", {})
-                
-                play_url = data.get("vod_play_url", "")
-                if not play_url:
-                    play_url = "预览$" + data.get("preview_url", "")
-
-                video = {
-                    "vod_id": str(data.get("vod_id", ids[0])),
-                    "vod_name": data.get("vod_name", ""),
-                    "vod_pic": data.get("vod_pic", ""),
-                    "vod_remarks": data.get("vod_remarks", ""),
-                    "vod_content": data.get("vod_blurb", "暂无简介"),
-                    "vod_play_from": "萝莉岛",
-                    "vod_play_url": play_url
+async def category(params, context):
+    p = params or {}
+    tid = str(p.get("categoryId") or p.get("tid") or "")
+    page = _to_int(p.get("page"), 1) or 1
+    cls = ""
+    if isinstance(p.get("filters"), dict):
+        cls = str(p["filters"].get("class") or "")
+    cls = cls or str(p.get("class") or "")
+    if not tid:
+        return {"list": [], "page": 1, "pagecount": 0, "limit": 30, "total": 0}
+    await _register()
+    num = (page - 1) * 30
+    payload = {
+        "num": str(num),
+        "pid": str(tid),
+        "area": "全部",
+        "vodclass": cls,
+        "vodyear": "全部",
+        "sort": "1",
+        "token": _state.get("token") or "",
+    }
+    try:
+        data = await _api("/api/vlist.php", "POST", payload)
+        lst_data = data.get("list") or data.get("data") or []
+        videos = []
+        for item in lst_data:
+            videos.append(
+                {
+                    "vod_id": str(item.get("vod_id") or item.get("id") or ""),
+                    "vod_name": item.get("vod_name") or item.get("name") or "",
+                    "vod_pic": item.get("vod_pic") or item.get("pic") or "",
+                    "vod_remarks": item.get("vod_class")
+                    or item.get("vod_remarks")
+                    or item.get("vod_total_time")
+                    or "",
                 }
-                return {"list": [video]}
-        except Exception as e:
-            print('[DETAIL]', e)
-        
-        return {"list": []}
-
-    def playerContent(self, flag, id, vipFlags=None):
-        """播放器直连"""
+            )
+        pagecount = page + (1 if len(videos) >= 25 else 0)
         return {
-            "parse": 0,
-            "url": id,
-            "header": json.dumps({"User-Agent": U})
+            "list": videos,
+            "page": page,
+            "pagecount": max(pagecount, page),
+            "limit": 30,
+            "total": pagecount * 30,
         }
+    except Exception as e:
+        await OmniBox.log("error", "[category] %s" % e)
+        return {"list": [], "page": 1, "pagecount": 0, "limit": 30, "total": 0}
 
-    def searchContent(self, key, quick=False, pg=1):
-        """搜索功能"""
+
+async def detail(params, context):
+    vid = str(
+        (params or {}).get("videoId")
+        or (params or {}).get("id")
+        or (params or {}).get("vod_id")
+        or ""
+    ).strip()
+    if not vid:
+        return {"list": []}
+    await _register()
+    payload = {"id": vid, "token": _state.get("token") or "", "channel": ""}
+    try:
+        data = await _api("/api/Get_vod_list.php", "POST", payload)
+        info = data.get("data") or data
+        if not isinstance(info, dict):
+            return {"list": []}
+        play_url = info.get("vod_play_url") or info.get("play_url") or ""
+        if not play_url:
+            prev = info.get("preview_url") or ""
+            if prev:
+                play_url = "预览$%s" % prev
+        
+        sources = []
+        if play_url:
+            lines = play_url.split("$$$") if "$$$" in play_url else [play_url]
+            for i, line in enumerate(lines):
+                eps = []
+                for ep in line.split("#"):
+                    if not ep.strip():
+                        continue
+                    if "$" in ep:
+                        name, url = ep.split("$", 1)
+                    else:
+                        name, url = "正片", ep
+                    name = name.strip() or "正片"
+                    url = url.strip()
+                    if url:
+                        eps.append({"name": name, "playId": url})
+                if eps:
+                    sources.append({"name": "线路%s" % (i + 1), "episodes": eps})
+        if not sources:
+            sources = [{"name": "默认", "episodes": [{"name": "正片", "playId": ""}]}]
+
+        vod = {
+            "vod_id": str(info.get("vod_id") or info.get("id") or vid),
+            "vod_name": info.get("vod_name") or info.get("name") or vid,
+            "vod_pic": info.get("vod_pic") or info.get("pic") or "",
+            "vod_remarks": info.get("vod_remarks") or "",
+            "vod_content": info.get("vod_blurb") or info.get("vod_content") or "",
+            "vod_play_sources": sources,
+        }
+        return {"list": [vod]}
+    except Exception as e:
+        await OmniBox.log("error", "[detail] %s" % e)
         return {"list": []}
 
-    def localProxy(self, param):
-        pass
+
+async def search(params, context):
+    return {"list": [], "page": 1, "pagecount": 0}
+
+
+async def play(params, context):
+    url = str(
+        (params or {}).get("playId")
+        or (params or {}).get("url")
+        or (params or {}).get("id")
+        or ""
+    ).strip()
+    headers = {"User-Agent": UA}
+    if not url:
+        return {"urls": [], "parse": 0, "header": headers}
+    if url.startswith("http"):
+        return {"urls": [{"name": "播放", "url": url}], "parse": 0, "header": headers}
+    return {"urls": [], "parse": 0, "header": headers}
+
+
+if __name__ == "__main__":
+    run({"home": home, "category": category, "detail": detail, "search": search, "play": play})
