@@ -1,42 +1,44 @@
 # -*- coding: utf-8 -*-
 # @name 野果短剧
-# @version 1.2.0
-# @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/18plus/%E9%87%8E%E6%9E%9C%E7%9F%AD%E5%89%A7.py
-# @description 野果短剧 AES 接口；errcode+data 解密
+# @version 1.1.0
+# @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/18plus/野果短剧.py
+# @dependencies cryptography,pycryptodome
+# @description 野果短剧站源（OmniBox v1.1）：双库 AES、嵌套 data 解包、episodeAll 播放
 
-import base64
 import json
-from urllib.parse import urlencode
+import base64
+from urllib.parse import quote
 
 from spider_runner import OmniBox, run
 
+_HAS_CRYPTOGRAPHY = False
+_HAS_PYCRYPTODOME = False
 try:
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    from cryptography.hazmat.primitives import padding as sym_padding
+    from cryptography.hazmat.primitives.ciphers import Cipher as _Cipher
+    from cryptography.hazmat.primitives.ciphers import algorithms as _algorithms
+    from cryptography.hazmat.primitives.ciphers import modes as _modes
+    from cryptography.hazmat.primitives import padding as _padding
+    _HAS_CRYPTOGRAPHY = True
 except Exception:
-    Cipher = None
+    pass
+try:
+    from Crypto.Cipher import AES as _AES
+    _HAS_PYCRYPTODOME = True
+except Exception:
+    pass
 
-API = "https://www.yeguodj.com/api.php"
-SITE = "https://www.yeguodj.com"
+SITE_URL = "https://www.yeguodj.com"
+API_BASE = "https://www.yeguodj.com/api.php"
 UA = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
 )
 API_KEY = b"2acf7e91e9864673"
 API_IV = b"1c29882d3ddfcfd6"
-BASE = {
-    "bundleId": "com.pwa.mater",
-    "version": "1.3.2",
-    "oauth_type": "web",
-    "language": "zh",
-    "via": "pwa",
-    "oauth_id": "7d05538c4b8a5e74e82f93c0dab0163c",
-    "token": "",
-    "trace_id": "7d05538c4b8a5e74e82f93c0dab0163c",
-}
 
 CLASSES = [
     {"type_id": "explore", "type_name": "发现"},
+    {"type_id": "rank", "type_name": "排行榜"},
     {"type_id": "dushi", "type_name": "都市"},
     {"type_id": "xiandai", "type_name": "现代"},
     {"type_id": "xiaoyuan", "type_name": "校园"},
@@ -49,7 +51,6 @@ CLASSES = [
     {"type_id": "nixi", "type_name": "逆袭"},
     {"type_id": "mogai", "type_name": "魔改"},
 ]
-# 筛选字段映射（后台 bg / setting id）
 BG_MAP = {"dushi": 40, "xiandai": 39, "xiaoyuan": 47, "gudai": 41, "xiangcun": 42, "zhichang": 44}
 SETTING_MAP = {"chongsheng": 26, "chuanyue": 27, "xitong": 28, "nixi": 53, "mogai": 56}
 
@@ -62,193 +63,283 @@ def _to_int(v, default=0):
 
 
 def _aes_decrypt(cipher_b64):
-    if not Cipher or not cipher_b64:
-        return ""
-    raw = base64.b64decode(cipher_b64)
-    decryptor = Cipher(algorithms.AES(API_KEY), modes.CBC(API_IV)).decryptor()
-    plain = decryptor.update(raw) + decryptor.finalize()
-    unpadder = sym_padding.PKCS7(128).unpadder()
-    return (unpadder.update(plain) + unpadder.finalize()).decode("utf-8", "ignore")
+    data = base64.b64decode(cipher_b64)
+    last_err = None
+    if _HAS_CRYPTOGRAPHY:
+        try:
+            decryptor = _Cipher(_algorithms.AES(API_KEY), _modes.CBC(API_IV)).decryptor()
+            plain = decryptor.update(data) + decryptor.finalize()
+            unpadder = _padding.PKCS7(128).unpadder()
+            plain = unpadder.update(plain) + unpadder.finalize()
+            return json.loads(plain.decode("utf-8", "ignore"))
+        except Exception as e:
+            last_err = e
+    if _HAS_PYCRYPTODOME:
+        try:
+            cipher = _AES.new(API_KEY, _AES.MODE_CBC, API_IV)
+            raw = cipher.decrypt(data)
+            if raw:
+                pad = raw[-1]
+                if 1 <= pad <= 16:
+                    raw = raw[:-pad]
+            return json.loads(raw.decode("utf-8", "ignore"))
+        except Exception as e:
+            last_err = e
+    raise RuntimeError("AES 解密失败: %s" % last_err)
 
 
-async def _api(path, extra=None):
-    payload = dict(BASE)
-    if extra:
-        payload.update(extra)
-    headers = {
-        "User-Agent": UA,
-        "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Referer": SITE + "/",
-        "Origin": SITE,
-    }
+async def _api_post(path, body=None):
+    url = "%s%s" % (API_BASE, path)
     res = await OmniBox.request(
-        API + path,
+        url,
         {
             "method": "POST",
-            "headers": headers,
-            "body": urlencode(payload),
-            "timeout": 15,
+            "headers": {
+                "User-Agent": UA,
+                "Referer": SITE_URL + "/",
+                "Origin": SITE_URL,
+                "Accept": "application/json, text/plain, */*",
+                "Content-Type": "application/json;charset=UTF-8",
+            },
+            "body": json.dumps(body or {}),
+            "timeout": 12,
         },
     )
-    body = res.get("body") or ""
-    if not body:
+    text = res.get("body") or ""
+    if not text:
         return {}
     try:
-        j = json.loads(body)
+        d = json.loads(text)
     except Exception:
         return {}
-    data = j.get("data")
-    if isinstance(data, str) and len(data) > 16:
+    data_val = d.get("data")
+    if isinstance(data_val, str) and len(data_val) > 20:
         try:
-            plain = json.loads(_aes_decrypt(data))
-            if isinstance(plain, dict) and "data" in plain:
-                return plain["data"] if isinstance(plain["data"], dict) else plain
-            return plain if isinstance(plain, dict) else {}
+            d["data"] = _aes_decrypt(data_val)
         except Exception as e:
-            await OmniBox.log("warn", "[aes] %s" % e)
-            return {}
-    return data if isinstance(data, dict) else {}
+            await OmniBox.log("error", "[api] 解密失败 %s: %s" % (path, e))
+    return d
 
 
-def _item(it):
-    vid = str(it.get("video_id") or it.get("id") or "")
+def _unwrap(d):
+    """解密后结构: {data: {...业务...}, status, msg} 或 业务字段直接在 data。"""
+    if not d:
+        return {}
+    x = d.get("data") if d.get("data") is not None else d
+    # 再包一层 {data: {list/top_list/...}, status}
+    if isinstance(x, dict) and isinstance(x.get("data"), dict):
+        inner = x["data"]
+        if any(k in inner for k in ("list", "top_list", "modules", "title", "video_url", "episodeAll", "episodes")):
+            return inner
+    return x if isinstance(x, dict) else {}
+
+
+def _to_vod(it):
+    if not it:
+        return None
+    vid = str(it.get("video_id") if it.get("video_id") is not None else (it.get("id") or "")).strip()
+    if not vid:
+        return None
+    title = str(it.get("title") or it.get("video_title") or it.get("name") or vid).strip()
+    raw_pic = str(it.get("cover") or it.get("cover_img") or it.get("pic") or "").strip()
+    remark = str(
+        it.get("serialize_status_text")
+        or it.get("update_status")
+        or it.get("play_count_text")
+        or ""
+    ).strip()
+    ep = it.get("episode_count") or it.get("episodes") or it.get("total_serial") or ""
+    if not remark and ep:
+        remark = "更新至%s集" % ep
     return {
         "vod_id": vid,
-        "vod_name": it.get("title") or vid,
-        "vod_pic": it.get("cover") or it.get("cover_img") or "",
-        "vod_remarks": it.get("play_count_text")
-        or it.get("serialize_status_text")
-        or "",
+        "vod_name": title,
+        "vod_pic": raw_pic,
+        "vod_remarks": remark,
     }
+
+
+def _list_from_payload(d):
+    inner = _unwrap(d)
+    arr = []
+    if isinstance(inner, dict):
+        arr = inner.get("list") or inner.get("top_list") or []
+        # modules.list[].items
+        if not arr:
+            mods = inner.get("modules") or {}
+            mod_list = mods.get("list") if isinstance(mods, dict) else []
+            for m in mod_list or []:
+                if isinstance(m, dict) and isinstance(m.get("items"), list):
+                    arr.extend(m["items"])
+                elif isinstance(m, dict) and isinstance(m.get("list"), list):
+                    arr.extend(m["list"])
+    elif isinstance(inner, list):
+        arr = inner
+    out, seen = [], set()
+    for it in arr:
+        v = _to_vod(it)
+        if v and v["vod_id"] not in seen:
+            seen.add(v["vod_id"])
+            out.append(v)
+    return out
 
 
 async def home(params, context):
     try:
-        data = await _api("/theater/exploreList", {"page": "1", "limit": "20"})
-        items = [_item(x) for x in (data.get("list") or [])]
-        return {"class": CLASSES, "list": items, "filters": {}}
+        await OmniBox.log(
+            "info",
+            "[home] crypto=%s/%s" % (_HAS_CRYPTOGRAPHY, _HAS_PYCRYPTODOME),
+        )
+        if not _HAS_CRYPTOGRAPHY and not _HAS_PYCRYPTODOME:
+            await OmniBox.log("error", "[home] 缺少 cryptography 或 pycryptodome")
+            return {"class": CLASSES, "list": [], "filters": {}}
+        d = await _api_post("/api/home/homePage", {})
+        v_list = _list_from_payload(d)
+        return {"class": CLASSES, "list": v_list[:30], "filters": {}}
     except Exception as e:
-        await OmniBox.log("error", "[home] %s" % e)
+        await OmniBox.log("error", "[home] 失败: %s" % e)
         return {"class": CLASSES, "list": [], "filters": {}}
 
 
 async def category(params, context):
-    p = params or {}
-    tid = str(p.get("categoryId") or p.get("tid") or "explore")
-    page = _to_int(p.get("page"), 1) or 1
-    extra = {"page": str(page), "limit": "20"}
-    if tid in BG_MAP:
-        extra["background"] = str(BG_MAP[tid])
-    elif tid in SETTING_MAP:
-        extra["setting"] = str(SETTING_MAP[tid])
     try:
-        data = await _api("/theater/exploreList", extra)
-        items = [_item(x) for x in (data.get("list") or [])]
-        total = _to_int(data.get("total"), len(items))
-        limit = _to_int(data.get("limit"), 20) or 20
-        pagecount = max(1, (total + limit - 1) // limit) if total else page
+        tid = str((params or {}).get("categoryId") or "explore").strip()
+        page = _to_int((params or {}).get("page"), 1) or 1
+        await OmniBox.log("info", "[category] %s page=%s" % (tid, page))
+        if tid == "rank":
+            d = await _api_post("/api/theater/videoRank", {"page": page, "limit": 24})
+        elif tid in BG_MAP:
+            d = await _api_post(
+                "/api/theater/exploreList",
+                {"page": page, "limit": 24, "background": BG_MAP[tid]},
+            )
+        elif tid in SETTING_MAP:
+            d = await _api_post(
+                "/api/theater/exploreList",
+                {"page": page, "limit": 24, "setting": SETTING_MAP[tid]},
+            )
+        else:
+            d = await _api_post("/api/theater/exploreList", {"page": page, "limit": 24})
+        v_list = _list_from_payload(d)
         return {
-            "list": items,
             "page": page,
-            "pagecount": pagecount,
-            "limit": limit,
-            "total": total,
+            "pagecount": page + 1 if len(v_list) >= 20 else page,
+            "limit": 24,
+            "total": 9999,
+            "list": v_list,
         }
     except Exception as e:
-        await OmniBox.log("error", "[category] %s" % e)
-        return {"list": [], "page": 1, "pagecount": 0, "limit": 20, "total": 0}
+        await OmniBox.log("error", "[category] 失败: %s" % e)
+        return {"list": [], "page": 1, "pagecount": 0, "total": 0, "limit": 24}
 
 
 async def detail(params, context):
-    vid = str(
-        (params or {}).get("videoId")
-        or (params or {}).get("id")
-        or (params or {}).get("vod_id")
-        or ""
-    ).strip()
-    if not vid:
-        return {"list": []}
     try:
-        data = await _api(
-            "/playlet/detail",
-            {
-                "video_id": vid,
-                "id": vid,
-                "episode_id": "0",
-                "related_limit": "0",
-            },
-        )
-        if not data:
+        vid = str((params or {}).get("videoId") or "").strip()
+        if not vid:
             return {"list": []}
-        eps = []
-        for ep in data.get("episodes") or []:
-            eid = str(ep.get("id") or ep.get("episode_id") or "")
-            name = ep.get("title") or ("第%s集" % (ep.get("sort") or len(eps) + 1))
-            if eid:
-                eps.append({"name": str(name), "playId": "%s_%s" % (vid, eid)})
-        if not eps:
-            eps = [{"name": "第1集", "playId": "%s_0" % vid}]
+        await OmniBox.log("info", "[detail] %s" % vid)
+        v_num = int(vid) if vid.isdigit() else vid
+        d = await _api_post("/api/playlet/detail", {"video_id": v_num})
+        info = _unwrap(d)
+        title = str(info.get("title") or vid).strip()
+        raw_pic = str(info.get("cover") or info.get("cover_img") or "").strip()
+        raw_desc = str(info.get("description") or info.get("intro") or "").strip()
+        eps = info.get("episodes") if isinstance(info.get("episodes"), list) else []
+        episodes = []
+        if eps:
+            for idx, ep in enumerate(eps):
+                n = str(ep.get("sort") or ep.get("episode") or (idx + 1)).strip()
+                t_name = str(ep.get("title") or ("第%s集" % n)).strip()
+                t_name = t_name.replace("$", "").replace("#", "")
+                episodes.append({"name": t_name, "playId": "%s:%s" % (vid, n)})
+        else:
+            total_cnt = int(info.get("episode_count") or info.get("total_serial") or 1)
+            for i in range(1, max(total_cnt, 1) + 1):
+                episodes.append({"name": "第%s集" % i, "playId": "%s:%s" % (vid, i)})
         vod = {
             "vod_id": vid,
-            "vod_name": data.get("title") or vid,
-            "vod_pic": data.get("cover") or "",
-            "vod_remarks": data.get("serialize_status_text") or "",
-            "vod_content": data.get("description") or "",
-            "vod_play_sources": [{"name": "野果", "episodes": eps}],
+            "vod_name": title,
+            "vod_pic": raw_pic,
+            "vod_remarks": "全%d集" % len(episodes),
+            "vod_content": raw_desc,
         }
+        if episodes:
+            vod["vod_play_sources"] = [{"name": "野果专线", "episodes": episodes}]
         return {"list": [vod]}
     except Exception as e:
-        await OmniBox.log("error", "[detail] %s" % e)
+        await OmniBox.log("error", "[detail] 失败: %s" % e)
         return {"list": []}
 
 
 async def search(params, context):
-    key = str((params or {}).get("keyword") or "").strip()
-    page = _to_int((params or {}).get("page"), 1) or 1
-    if not key:
-        return {"list": []}
     try:
-        data = await _api(
-            "/search/result",
-            {"keyword": key, "page": str(page), "tab": "video"},
-        )
-        items = [_item(x) for x in (data.get("list") or [])]
-        return {"list": items, "page": page, "pagecount": page + (1 if items else 0)}
+        kw = str((params or {}).get("keyword") or (params or {}).get("wd") or "").strip()
+        page = _to_int((params or {}).get("page"), 1) or 1
+        if not kw:
+            return {"list": [], "page": 1, "pagecount": 0, "total": 0, "limit": 0}
+        await OmniBox.log("info", "[search] %s" % kw)
+        d = await _api_post("/api/search/result", {"keyword": kw, "page": page})
+        v_list = _list_from_payload(d)
+        return {
+            "page": page,
+            "pagecount": page + 1 if len(v_list) >= 20 else page,
+            "limit": len(v_list) or 24,
+            "total": 9999,
+            "list": v_list,
+        }
     except Exception as e:
-        await OmniBox.log("error", "[search] %s" % e)
-        return {"list": []}
+        await OmniBox.log("error", "[search] 失败: %s" % e)
+        return {"list": [], "page": 1, "pagecount": 0, "total": 0, "limit": 0}
 
 
 async def play(params, context):
-    play_id = str(
-        (params or {}).get("playId")
-        or (params or {}).get("url")
-        or (params or {}).get("id")
-        or ""
-    ).strip()
-    headers = {"User-Agent": UA, "Referer": SITE + "/"}
-    if not play_id:
-        return {"urls": [], "parse": 0, "header": headers}
-    if play_id.startswith("http"):
-        return {"urls": [{"name": "播放", "url": play_id}], "parse": 0, "header": headers}
-    parts = play_id.split("_", 1)
-    vid, eid = parts[0], (parts[1] if len(parts) > 1 else "0")
     try:
-        data = await _api(
-            "/playlet/play",
-            {"video_id": vid, "episode_id": eid},
-        )
-        url = data.get("video_url") or data.get("video_url_h265") or ""
-        if url:
-            return {
-                "urls": [{"name": "播放", "url": url}],
-                "parse": 0,
-                "header": headers,
-            }
+        raw = str((params or {}).get("playId") or "").strip()
+        flag = str((params or {}).get("flag") or "play")
+        if not raw:
+            raise ValueError("playId 为空")
+        await OmniBox.log("info", "[play] %s" % raw)
+        parts = raw.split(":")
+        vid = parts[0]
+        ep = parts[1] if len(parts) > 1 else "1"
+        v_num = int(vid) if vid.isdigit() else vid
+        ep_num = int(ep) if str(ep).isdigit() else ep
+        d = await _api_post("/api/playlet/play", {"video_id": v_num, "ep": ep_num})
+        info = _unwrap(d)
+        target_ep = str(ep).strip()
+        video_url = ""
+        episode_all = info.get("episodeAll")
+        if isinstance(episode_all, list) and episode_all:
+            for idx, episode in enumerate(episode_all):
+                if not isinstance(episode, dict):
+                    continue
+                episode_no = str(
+                    episode.get("sort")
+                    or episode.get("episode")
+                    or episode.get("index")
+                    or (idx + 1)
+                ).strip()
+                if episode_no == target_ep:
+                    video_url = str(episode.get("video_url") or "").strip()
+                    break
+            if not video_url:
+                video_url = str(info.get("video_url") or "").strip()
+        else:
+            video_url = str(info.get("video_url") or "").strip()
+        return {
+            "urls": [{"name": "播放", "url": video_url}] if video_url else [],
+            "flag": flag,
+            "header": {
+                "User-Agent": UA,
+                "Referer": SITE_URL + "/",
+                "Origin": SITE_URL,
+            },
+            "parse": 0 if video_url else 1,
+        }
     except Exception as e:
-        await OmniBox.log("error", "[play] %s" % e)
-    return {"urls": [], "parse": 0, "header": headers}
+        await OmniBox.log("error", "[play] 失败: %s" % e)
+        return {"urls": [], "flag": (params or {}).get("flag", "play"), "header": {}, "parse": 0}
 
 
 if __name__ == "__main__":
