@@ -1,4 +1,5 @@
 // @name 黄色仓库
+// @version 1.2.0
 /**
  * OmniBox 采集站直接爬虫脚本
 // @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/18plus/🔞黄色仓库.js
@@ -287,8 +288,15 @@ function formatDetailVideos(list) {
 
       const vodPlayUrl = String(item.vod_play_url || item.VodPlayURL || "");
 
-      // 转换为新格式的播放源
-      const vodPlaySources = convertToPlaySources(vodPlayFrom, vodPlayUrl, vodId);
+      // 转换为新格式的播放源（m3u8 线路优先）
+      let vodPlaySources = convertToPlaySources(vodPlayFrom, vodPlayUrl, vodId);
+      vodPlaySources = (vodPlaySources || []).slice().sort((a, b) => {
+        const au = ((a.episodes || [])[0] || {}).playId || "";
+        const bu = ((b.episodes || [])[0] || {}).playId || "";
+        const as = /\.m3u8/i.test(au) ? 0 : 1;
+        const bs = /\.m3u8/i.test(bu) ? 0 : 1;
+        return as - bs;
+      });
 
       return {
         vod_id: vodId,
@@ -814,7 +822,7 @@ function extractVideoIdFromFlag(flag) {
  */
 async function play(params) {
   try {
-    const playId = params.playId;
+    let playId = params.playId;
     const flag = params.flag || "";
 
     if (!playId) {
@@ -827,8 +835,19 @@ async function play(params) {
 
     OmniBox.log("info", `获取播放地址: playId=${playId}, flag=${flag}, videoId=${videoId}`);
 
-    // 构建播放地址响应
-    // 统一使用数组格式，每个元素包含 name 和 url，类似 danmaku 格式
+    // share 页 → 常见 m3u8 直链规则
+    if (/hsckyun\.|\/share\//i.test(playId) && !/\.m3u8/i.test(playId)) {
+      const m = playId.match(/\/share\/([^?]+)/i);
+      if (m) {
+        const candidate = `https://hsm3.hwzcfz.com/${m[1].replace(/\/+$/, "")}/index.m3u8`;
+        OmniBox.log("info", `share 转 m3u8: ${candidate}`);
+        playId = candidate;
+      }
+    }
+
+    // 是否媒体直链（允许 query string）
+    const isMedia = /\.(m3u8|mp4)(\?|$)/i.test(playId) || /\/index\.m3u8/i.test(playId);
+
     let urlsResult = [
       {
         name: "播放",
@@ -836,16 +855,15 @@ async function play(params) {
       },
     ];
 
-    let parse = 1; // 默认需要解析
-    // 如果是直接的 m3u8 或 mp4 链接，不需要解析
-    if (/\.(m3u8|mp4)$/.test(playId)) {
-      parse = 0;
-    }
+    let parse = isMedia ? 0 : 1;
 
     let playResponse = {
       urls: urlsResult,
       flag: flag,
-      header: {},
+      header: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://hsckzy.xyz/",
+      },
       parse: parse,
     };
 
