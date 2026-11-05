@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # @name 影探4K
-# @version 1.1.0
+# @version 1.2.0
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/%E7%94%B5%E5%BD%B1%E7%94%B5%E8%A7%86/影探4K.py
 # @dependencies cryptography,pycryptodome
 # @description 影探4K/lyyytv CMS 源（OmniBox）：app API、lvdou 解密、ldmax 解析兜底
 
 """
-影探4K — OmniBox 适配版 v1.1.0
+影探4K — OmniBox 适配版 v1.2.0
 站点 CMS: http://cms.lyyytv.cn
 保留 lvdou AES 解密；多组 JSON 解析轮询；失败则回退网页解析(jx)。
 """
@@ -332,21 +332,33 @@ async def detail(params, context):
             if not isinstance(line, dict):
                 continue
             line_name = str(line.get("name") or ("线路%s" % (i + 1))).strip()
+            raw_url = str(line.get("url") or "")
+            # 去掉集与集之间的空段；保留 $ 后完整地址
             episodes = []
-            for j, seg in enumerate(str(line.get("url") or "").split("#")):
+            for j, seg in enumerate(raw_url.split("#")):
                 seg = seg.strip()
                 if not seg:
                     continue
                 if "$" in seg:
                     name, play_id = seg.split("$", 1)
-                    play_id = _lvdou(play_id.strip())
+                    play_id = _lvdou(play_id.strip()).rstrip("#").strip()
                     name = name.strip() or ("第%s集" % (j + 1))
                 else:
-                    name, play_id = "第%s集" % (j + 1), _lvdou(seg)
+                    name, play_id = "第%s集" % (j + 1), _lvdou(seg).rstrip("#").strip()
                 if play_id:
                     episodes.append({"name": name, "playId": play_id})
             if episodes:
                 sources.append({"name": line_name, "episodes": episodes})
+
+        # 自建 4K 文件域名普遍 404：把官站线路排前面，方便直接看
+        def _src_score(s):
+            sample = (s.get("episodes") or [{}])[0].get("playId") or ""
+            if any(d in sample for d in ("iqiyi.com", "youku.com", "v.qq.com", "mgtv.com", "bilibili.com")):
+                return 0
+            if "lyyytv.cn/d/file" in sample or "ym4kjx" in sample:
+                return 2
+            return 1
+        sources.sort(key=_src_score)
 
         if sources:
             vod["vod_play_sources"] = sources
@@ -400,7 +412,8 @@ async def play(params, context):
         flag = str((params or {}).get("flag") or "play")
         if not play_id:
             raise ValueError("playId 为空")
-        play_id = re.sub(r"%[0-9A-Fa-f]{2}", "", play_id)
+        # 仅清理尾部残留 #，不要剥离 %XX（会破坏中文路径）
+        play_id = play_id.rstrip("#").strip()
         await OmniBox.log("info", "[play] %s" % play_id[:120])
 
         url = play_id
@@ -409,6 +422,16 @@ async def play(params, context):
 
         # 1) 已是媒体直链
         if is_http and _is_media(url):
+            # 自建文件大量 404，再走一遍解析兜底
+            if "lyyytv.cn/d/file" in url or "ym4kjx" in url:
+                parsed = await _json_parse(url)
+                if parsed and _is_media(parsed) and parsed != url:
+                    return {
+                        "urls": [{"name": "播放", "url": parsed}],
+                        "flag": flag,
+                        "header": headers,
+                        "parse": 0,
+                    }
             return {
                 "urls": [{"name": "播放", "url": url}],
                 "flag": flag,
@@ -430,16 +453,17 @@ async def play(params, context):
             if parsed and parsed.startswith("http"):
                 url = parsed
 
-        # 3) 官站：交给壳子用网页解析（jx 前缀）
+        # 3) 官站 / 非媒体：交给壳子网页解析
         if _is_official(url) or (is_http and not _is_media(url)):
-            jx = WEB_JX[0] if WEB_JX else ""
-            return {
+            result = {
                 "urls": [{"name": "播放", "url": url}],
                 "flag": flag,
                 "header": headers,
                 "parse": 1,
-                "jx": jx,
             }
+            if WEB_JX:
+                result["jx"] = WEB_JX[0]
+            return result
 
         # 4) 其它
         parse = 0 if _is_media(url) else 1
