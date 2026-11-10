@@ -2,7 +2,7 @@
 // @author @lucky_TJQ
 // @description 聚合玩偶、木偶、蜡笔、闪电、多多等网盘站点；支持刮削、弹幕、多线路、二级分类筛选、翻页、网盘排序；监控同步；多多=监控+本地，其余仅监控
 // @dependencies axios,cheerio
-// @version 1.3.3
+// @version 1.3.2
 // @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/%E7%BD%91%E7%9B%98/%E7%8E%A9%E5%81%B6%E8%81%9A%E5%90%88.js
 
 const OmniBox = require("omnibox_sdk");
@@ -72,6 +72,7 @@ const MUOU_SITES = splitSites(process.env.WEB_SITE_MUOU || "https://123.666291.x
 const LABI_SITES = splitSites(process.env.WEB_SITE_LABI || "http://tvpanpan.site;https://www.mmpanpan.site;");
 const SHANDIAN_SITES = splitSites(process.env.WEB_SITE_SHANDIAN || "http://shandian.blog;http://sd.sduc.site;");
 const DUODUO_SITES = splitSites(process.env.WEB_SITE_DUODUO || "https://tv.yydsys.top;https://tv.yydsys.cc;https://tv.214521.xyz;https://yydsys.de5.net;");
+// 已移除站点保留空数组，避免旧逻辑引用报错
 const WONIU4K_SITES = [];
 
 // ==================== 站点监控（pan-site-monitor）====================
@@ -133,6 +134,10 @@ pushSiteIfAny({
   defaultCategories: { "1": "电影", "2": "电视剧", "3": "动漫", "4": "综艺", "5": "短剧", "24": "蜡笔4K", "29": "臻彩" },
 });
 
+
+
+
+
 pushSiteIfAny({
   id: "shandian",
   name: "闪电",
@@ -143,6 +148,7 @@ pushSiteIfAny({
   searchListSelector: ".module-search-item",
   defaultCategories: { "1": "电影", "2": "电视剧", "3": "综艺", "4": "动漫", "30": "短剧" },
 });
+
 
 pushSiteIfAny({
   id: "duoduo",
@@ -156,6 +162,7 @@ pushSiteIfAny({
 });
 
 // 蜗牛4K：MacCMS mxone 伪静态，主推 115（含 115cdn/anxia）
+
 if (SITES.length === 0) {
   throw new Error("至少需要一个站点配置，请检查环境变量配置");
 }
@@ -471,7 +478,6 @@ function pickDomainsFromMonitor(monitorSite) {
  * 用 pan-site-monitor 结果刷新 SITES[].domains
  * 策略：监控可用域名在前，原 env/本地域名垫后；监控失败则保持原配置
  */
-
 async function syncDomainsFromMonitor(force = false) {
   if (!ENABLE_SITE_MONITOR) return false;
 
@@ -481,7 +487,7 @@ async function syncDomainsFromMonitor(force = false) {
 
     for (const site of SITES) {
       const monitorName = MONITOR_SITE_MAP[site.id];
-      if (!monitorName) continue; // 多多等不在表内，保留本地池
+      if (!monitorName) continue;
 
       const monitorSite = data.sites[monitorName];
       if (!monitorSite) {
@@ -1680,25 +1686,35 @@ async function getLoginStatus() {
 
 async function home(params, context) {
   try {
-    // 监控后台同步，不阻塞首页打开
-    if (ENABLE_SITE_MONITOR) {
-      Promise.resolve()
-        .then(() => syncDomainsFromMonitor())
-        .catch((e) => OmniBox.log("warn", `[monitor] bg sync: ${e && e.message ? e.message : e}`));
-    }
-
+    await syncDomainsFromMonitor();
     await OmniBox.log("info", `[home] start, sites=${SITES.length}`);
+
     const classList = SITES.map((site) => ({ type_id: `site_${site.id}`, type_name: site.name }));
 
-    // 首页只用本地默认筛选，不拉远程 filter JSON（进分类时再拉）
     const filters = {};
-    for (const site of SITES) {
-      filters[`site_${site.id}`] = buildSiteFilters(site, null);
+    const filterResults = await Promise.all(
+      SITES.map(async (site) => ({ siteId: site.id, filters: buildSiteFilters(site, await fetchExternalFilterConfig(site)) }))
+    );
+    for (const item of filterResults) {
+      filters[`site_${item.siteId}`] = item.filters;
     }
 
-    // 不预拉推荐列表，避免打开时打多个站
-    await OmniBox.log("info", `[home] class=${classList.length} (fast)`);
-    return { class: classList, list: [], filters };
+    const recommendResults = await Promise.all(
+      SITES.slice(0, 3).map(async (site) => {
+        try {
+          const firstCategory = Object.keys(site.defaultCategories)[0] || "1";
+          const result = await fetchSiteCategoryList(site, firstCategory, 1);
+          return result.list.slice(0, 4);
+        } catch (error) {
+          await OmniBox.log("warn", `[home] recommend fail ${site.name}: ${error.message}`);
+          return [];
+        }
+      })
+    );
+
+    const recommendList = recommendResults.flat().slice(0, 12);
+    await OmniBox.log("info", `[home] class=${classList.length}, recommend=${recommendList.length}`);
+    return { class: classList, list: recommendList, filters };
   } catch (error) {
     await OmniBox.log("error", `[home] ${error.message}`);
     return { class: [], list: [], filters: {} };
@@ -1707,7 +1723,6 @@ async function home(params, context) {
 
 async function category(params, context) {
   try {
-    // 分类进入时再确保同步一次（有缓存，通常很快）
     await syncDomainsFromMonitor();
     const typeId = params.categoryId || "";
     const page = parseInt(params.page || "1", 10);
