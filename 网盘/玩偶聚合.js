@@ -1,8 +1,8 @@
 // @name 玩偶聚合
 // @author @lucky_TJQ
-// @description 聚合玩偶、木偶、蜡笔、闪电、多多等网盘站点；支持刮削、弹幕、多线路、二级分类筛选、翻页、网盘排序；本地地址池（无监控同步）
+// @description 聚合玩偶、木偶、蜡笔、闪电、多多等网盘站点；支持刮削、弹幕、多线路、二级分类筛选、翻页、网盘排序；监控同步；多多=监控+本地，其余仅监控
 // @dependencies axios,cheerio
-// @version 1.3.0
+// @version 1.3.2
 // @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/%E7%BD%91%E7%9B%98/%E7%8E%A9%E5%81%B6%E8%81%9A%E5%90%88.js
 
 const OmniBox = require("omnibox_sdk");
@@ -64,20 +64,21 @@ const WONIU4K_PASSWORD = String(process.env.WONIU4K_PASSWORD || process.env.WONI
 const WONIU4K_COOKIE = String(process.env.WONIU4K_COOKIE || process.env.WONIU4K_COOKIES || "").trim();
 
 // ==================== 站点域名配置 ====================
-// 地址池（本地固定，不再走监控同步；失效时再改）
-const WOGG_SITES = splitSites(process.env.WEB_SITE_WOGG || "https://wogg.333232.xyz;https://www.wogg.net;https://wogg.xxooo.cf;https://www.wogg.xyz;");
-const MUOU_SITES = splitSites(process.env.WEB_SITE_MUOU || "https://666.666291.xyz;http://123.666291.xyz;https://www.muou.site;https://www.muou.asia;");
-const LABI_SITES = splitSites(process.env.WEB_SITE_LABI || "https://feimaoai.site;https://www.feimaoai.site;http://fmao.shop;");
-const SHANDIAN_SITES = splitSites(process.env.WEB_SITE_SHANDIAN || "http://1.95.79.193;http://feimaouc.cloud:666;https://sd.sduc.site;");
+// 地址池：
+// - 多多：本地池保留，并与监控地址合并
+// - 其余：仅作启动种子，运行后由监控全量替换（不保留本地）
+const WOGG_SITES = splitSites(process.env.WEB_SITE_WOGG || "https://woggpan.888484.xyz;https://www.wogg.net;");
+const MUOU_SITES = splitSites(process.env.WEB_SITE_MUOU || "https://123.666291.xyz;https://www.muoua.top;https://333.333291.xyz;https://666.666291.xyz;");
+const LABI_SITES = splitSites(process.env.WEB_SITE_LABI || "http://tvpanpan.site;https://www.mmpanpan.site;");
+const SHANDIAN_SITES = splitSites(process.env.WEB_SITE_SHANDIAN || "http://shandian.blog;http://sd.sduc.site;");
 const DUODUO_SITES = splitSites(process.env.WEB_SITE_DUODUO || "https://tv.yydsys.top;https://tv.yydsys.cc;https://tv.214521.xyz;https://yydsys.de5.net;");
-// 已移除蜗牛4K，保留空数组避免旧逻辑引用报错
 const WONIU4K_SITES = [];
 
 // ==================== 站点监控（pan-site-monitor）====================
 // 关闭监控：ENABLE_SITE_MONITOR=0
 // 自定义数据源：PAN_MONITOR_URL=https://...
 // 缓存秒数：MONITOR_CACHE_SECONDS=600（默认 10 分钟）
-const ENABLE_SITE_MONITOR = false; // 已关闭监控，仅用本地地址池
+const ENABLE_SITE_MONITOR = process.env.ENABLE_SITE_MONITOR !== "0";
 const MONITOR_URL =
   process.env.PAN_MONITOR_URL ||
   "https://pan-site-monitor.vercel.app/assets/data/monitor_data.json";
@@ -471,12 +472,7 @@ function pickDomainsFromMonitor(monitorSite) {
  * 策略：监控可用域名在前，原 env/本地域名垫后；监控失败则保持原配置
  */
 
-async function syncDomainsFromMonitor() {
-  // 监控已关闭：不拉远程最优域名，直接使用本地地址池
-  return;
-}
-
-async function syncDomainsFromMonitor_DISABLED(force = false) {
+async function syncDomainsFromMonitor(force = false) {
   if (!ENABLE_SITE_MONITOR) return false;
 
   try {
@@ -485,7 +481,7 @@ async function syncDomainsFromMonitor_DISABLED(force = false) {
 
     for (const site of SITES) {
       const monitorName = MONITOR_SITE_MAP[site.id];
-      if (!monitorName) continue;
+      if (!monitorName) continue; // 多多等不在表内，保留本地池
 
       const monitorSite = data.sites[monitorName];
       if (!monitorSite) {
@@ -503,8 +499,15 @@ async function syncDomainsFromMonitor_DISABLED(force = false) {
         continue;
       }
 
-      const localOnly = (site.domains || []).filter((d) => !fromMonitor.includes(normalizeDomainUrl(d)));
-      const merged = uniqueDomains([...fromMonitor, ...localOnly]);
+      let merged;
+      if (site.id === "duoduo") {
+        // 多多：监控优先，并保留本地地址池
+        const localOnly = (site.domains || []).filter((d) => !fromMonitor.includes(normalizeDomainUrl(d)));
+        merged = uniqueDomains([...fromMonitor, ...localOnly]);
+      } else {
+        // 其余：只用监控地址，不保留本地
+        merged = uniqueDomains(fromMonitor);
+      }
 
       const before = (site.domains || []).join(";");
       const after = merged.join(";");
