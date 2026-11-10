@@ -2,7 +2,7 @@
 // @author @lucky_TJQ
 // @description 聚合玩偶、木偶、蜡笔、闪电、多多等网盘站点；支持刮削、弹幕、多线路、二级分类筛选、翻页、网盘排序；监控同步；多多=监控+本地，其余仅监控
 // @dependencies axios,cheerio
-// @version 1.3.2
+// @version 1.3.3
 // @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/%E7%BD%91%E7%9B%98/%E7%8E%A9%E5%81%B6%E8%81%9A%E5%90%88.js
 
 const OmniBox = require("omnibox_sdk");
@@ -1680,35 +1680,25 @@ async function getLoginStatus() {
 
 async function home(params, context) {
   try {
-    await syncDomainsFromMonitor();
-    await OmniBox.log("info", `[home] start, sites=${SITES.length}`);
-
-    const classList = SITES.map((site) => ({ type_id: `site_${site.id}`, type_name: site.name }));
-
-    const filters = {};
-    const filterResults = await Promise.all(
-      SITES.map(async (site) => ({ siteId: site.id, filters: buildSiteFilters(site, await fetchExternalFilterConfig(site)) }))
-    );
-    for (const item of filterResults) {
-      filters[`site_${item.siteId}`] = item.filters;
+    // 监控后台同步，不阻塞首页打开
+    if (ENABLE_SITE_MONITOR) {
+      Promise.resolve()
+        .then(() => syncDomainsFromMonitor())
+        .catch((e) => OmniBox.log("warn", `[monitor] bg sync: ${e && e.message ? e.message : e}`));
     }
 
-    const recommendResults = await Promise.all(
-      SITES.slice(0, 3).map(async (site) => {
-        try {
-          const firstCategory = Object.keys(site.defaultCategories)[0] || "1";
-          const result = await fetchSiteCategoryList(site, firstCategory, 1);
-          return result.list.slice(0, 4);
-        } catch (error) {
-          await OmniBox.log("warn", `[home] recommend fail ${site.name}: ${error.message}`);
-          return [];
-        }
-      })
-    );
+    await OmniBox.log("info", `[home] start, sites=${SITES.length}`);
+    const classList = SITES.map((site) => ({ type_id: `site_${site.id}`, type_name: site.name }));
 
-    const recommendList = recommendResults.flat().slice(0, 12);
-    await OmniBox.log("info", `[home] class=${classList.length}, recommend=${recommendList.length}`);
-    return { class: classList, list: recommendList, filters };
+    // 首页只用本地默认筛选，不拉远程 filter JSON（进分类时再拉）
+    const filters = {};
+    for (const site of SITES) {
+      filters[`site_${site.id}`] = buildSiteFilters(site, null);
+    }
+
+    // 不预拉推荐列表，避免打开时打多个站
+    await OmniBox.log("info", `[home] class=${classList.length} (fast)`);
+    return { class: classList, list: [], filters };
   } catch (error) {
     await OmniBox.log("error", `[home] ${error.message}`);
     return { class: [], list: [], filters: {} };
@@ -1717,6 +1707,7 @@ async function home(params, context) {
 
 async function category(params, context) {
   try {
+    // 分类进入时再确保同步一次（有缓存，通常很快）
     await syncDomainsFromMonitor();
     const typeId = params.categoryId || "";
     const page = parseInt(params.page || "1", 10);
