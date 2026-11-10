@@ -1,8 +1,8 @@
 // @name 玩偶聚合
 // @author @lucky_TJQ
-// @description 聚合玩偶、木偶、蜡笔、闪电、至臻、二小、虎斑、快映、欧哥、多多、蜗牛4K等网盘站点；支持刮削、弹幕、多线路、二级分类筛选、翻页、网盘排序；自动同步 pan-site-monitor 最优域名
+// @description 聚合玩偶、木偶、蜡笔、闪电、多多等网盘站点；支持刮削、弹幕、多线路、二级分类筛选、翻页、网盘排序；自动同步 pan-site-monitor 最优域名
 // @dependencies axios,cheerio
-// @version 1.2.7
+// @version 1.2.9
 // @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/%E7%BD%91%E7%9B%98/%E7%8E%A9%E5%81%B6%E8%81%9A%E5%90%88.js
 
 const OmniBox = require("omnibox_sdk");
@@ -67,14 +67,10 @@ const WONIU4K_COOKIE = String(process.env.WONIU4K_COOKIE || process.env.WONIU4K_
 const WOGG_SITES = splitSites(process.env.WEB_SITE_WOGG || "https://wogg.xxooo.cf;https://wogg.333232.xyz;https://www.wogg.net;");
 const MUOU_SITES = splitSites(process.env.WEB_SITE_MUOU || "https://www.muou.site;https://www.muou.asia;https://666.666291.xyz;");
 const LABI_SITES = splitSites(process.env.WEB_SITE_LABI || "http://fmao.shop;");
-const ZHIZHEN_SITES = splitSites(process.env.WEB_SITE_ZHIZHEN || "http://www.miqk.cc;https://www.mihdr.top;https://mihdr.top;");
-const ERXIAO_SITES = splitSites(process.env.WEB_SITE_ERXIAO || "https://www.2xiaopan.top;https://www.erixaopan.fun;https://2xiaopan.top;https://www.wexwp.cc;");
-const HUBAN_SITES = splitSites(process.env.WEB_SITE_HUBAN || "http://38.76.197.172:16969;http://154.222.27.33:20720;http://xhban.xyz:20720;http://103.45.162.207:20720;");
-const KUAIYING_SITES = splitSites(process.env.WEB_SITE_XIAOBAN || " http://38.76.197.172:12521;http://154.201.83.50:12512;http://xsayang.fun:12512;");
 const SHANDIAN_SITES = splitSites(process.env.WEB_SITE_SHANDIAN || "https://sd.sduc.site;");
-const OUGE_SITES = splitSites(process.env.WEB_SITE_OUGE || "https://woog.nxog.eu.org;");
 const DUODUO_SITES = splitSites(process.env.WEB_SITE_DUODUO || "https://tv.yydsys.top;https://tv.214521.xyz;https://tv.yydsys.cc;https://yydsys.de5.net;https://duo.hidns.vip;");
-const WONIU4K_SITES = splitSites(process.env.WEB_SITE_WONIU4K || "https://zmi.kdns.fr;");
+// 已移除蜗牛4K站点，保留空数组避免旧逻辑引用报错
+const WONIU4K_SITES = [];
 
 // ==================== 站点监控（pan-site-monitor）====================
 // 关闭监控：ENABLE_SITE_MONITOR=0
@@ -92,11 +88,7 @@ const MONITOR_SITE_MAP = {
   muou: "木偶",
   labi: "蜡笔",
   shandian: "闪电",
-  ouge: "欧哥",
   duoduo: "多多",
-  huban: "虎斑",
-  kuaiying: "小斑", // 快映
-  // zhizhen / erxiao / woniu4k 监控站暂无，保持本地 WEB_SITE_* 配置
 };
 
 let _monitorCache = { data: null, at: 0 };
@@ -140,50 +132,6 @@ pushSiteIfAny({
 });
 
 pushSiteIfAny({
-  id: "zhizhen",
-  name: "至臻",
-  filterFiles: ["zhizhen.json"],
-  domains: ZHIZHEN_SITES,
-  listSelector: "#main .module-item",
-  detailPanSelector: ".module-row-info p",
-  searchListSelector: ".module-search-item",
-  defaultCategories: { "1": "电影", "2": "电视剧", "3": "动漫", "4": "综艺", "5": "短剧", "24": "老剧", "44": "臻彩" },
-});
-
-pushSiteIfAny({
-  id: "erxiao",
-  name: "二小",
-  filterFiles: ["erxiao.json"],
-  domains: ERXIAO_SITES,
-  listSelector: "#main .module-item",
-  detailPanSelector: ".module-row-info p",
-  searchListSelector: ".module-search-item",
-  defaultCategories: { "1": "电影", "2": "电视剧", "3": "动漫", "4": "臻彩", "21": "综艺" },
-});
-
-pushSiteIfAny({
-  id: "huban",
-  name: "虎斑",
-  filterFiles: ["huban.json"],
-  domains: HUBAN_SITES,
-  listSelector: "#main .module-item",
-  detailPanSelector: ".module-row-info p",
-  searchListSelector: ".module-search-item",
-  defaultCategories: { "1": "电影", "2": "电视剧", "3": "综艺", "4": "动漫", "5": "短剧", "6": "臻彩", "30": "115网盘" },
-});
-
-pushSiteIfAny({
-  id: "kuaiying",
-  name: "快映",
-  filterFiles: ["xiaoban.json"],
-  domains: KUAIYING_SITES,
-  listSelector: "#main .module-item",
-  detailPanSelector: ".module-row-info p",
-  searchListSelector: ".module-search-item",
-  defaultCategories: { "1": "电影", "2": "电视剧", "3": "综艺", "4": "动漫", "5": "臻彩", "6": "短剧", "30": "115", "35": "123", "36": "天移迅" },
-});
-
-pushSiteIfAny({
   id: "shandian",
   name: "闪电",
   filterFiles: ["shandian.json"],
@@ -192,17 +140,6 @@ pushSiteIfAny({
   detailPanSelector: ".module-row-info p",
   searchListSelector: ".module-search-item",
   defaultCategories: { "1": "电影", "2": "电视剧", "3": "综艺", "4": "动漫", "30": "短剧" },
-});
-
-pushSiteIfAny({
-  id: "ouge",
-  name: "欧哥",
-  filterFiles: ["ouge.json"],
-  domains: OUGE_SITES,
-  listSelector: "#main .module-item",
-  detailPanSelector: ".module-row-info p",
-  searchListSelector: ".module-search-item",
-  defaultCategories: { "1": "电影", "2": "电视剧", "3": "动漫", "4": "综艺", "5": "短剧", "21": "综合" },
 });
 
 pushSiteIfAny({
@@ -217,22 +154,6 @@ pushSiteIfAny({
 });
 
 // 蜗牛4K：MacCMS mxone 伪静态，主推 115（含 115cdn/anxia）
-pushSiteIfAny({
-  id: "woniu4k",
-  name: "蜗牛4K",
-  filterFiles: [],
-  domains: WONIU4K_SITES,
-  listSelector: ".module-item,a.video-card",
-  detailPanSelector: ".module-row-info",
-  categoryUrl: "/vodtype/{categoryId}/",
-  categoryUrlPage: "/vodtype/{categoryId}-{page}/",
-  searchUrl: "/vodsearch/{keyword}-------------/",
-  searchUrlPage: "/vodsearch/{keyword}----------{page}---/",
-  searchListSelector: ".module-search-item,.module-item,a.video-card",
-  panExtractMode: "mxone",
-  defaultCategories: { "1": "电影", "2": "连续剧", "3": "综艺", "4": "动漫" },
-});
-
 if (SITES.length === 0) {
   throw new Error("至少需要一个站点配置，请检查环境变量配置");
 }
