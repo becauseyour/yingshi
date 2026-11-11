@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # @name 草榴社区
-# @version 1.0.0
+# @version 1.0.1
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/18plus/草榴社区.py
 # @description 草榴社区（国产传媒/剧情/黑料等），支持视频与图文，直连 m3u8 优先
 
@@ -160,8 +160,10 @@ def extract_play_url(text):
 
 
 async def home(params, context):
-    text = await _get(HOST + "/")
-    list_items = _parse_list(text, is_article=False)[:30] if text else []
+    # 根路径是入口页，实际列表在分类页
+    first = CLASSES[0]["type_id"]
+    text = await _get(f"{HOST}/vodtype/{first}.html")
+    list_items = _parse_list(text, is_article=False)[:40] if text else []
     return {"class": CLASSES, "list": list_items, "filters": {}}
 
 
