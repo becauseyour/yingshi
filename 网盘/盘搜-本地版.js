@@ -1,69 +1,81 @@
-// @name 盘搜
+// @name 盘搜-本地版
 // @author becauseyour
-// @description 对接本地盘搜，搜索网盘分享链接
-// @version 1.4.0
-// @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/%E7%BD%91%E7%9B%98/%E7%9B%98%E6%90%9C.js
+// @description 对接本地盘搜API，使用OmniBox网盘SDK解析播放
+// @version 1.4.1
 
 const OmniBox = require("omnibox_sdk");
 
-// ==================== 配置 ====================
 const PANSOU_API = process.env.PANSOU_API || "http://192.168.2.1:17080";
+
+function isVideoFile(file) {
+  if (!file || !file.file_name) return false;
+  const name = String(file.file_name).toLowerCase();
+  return /\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|rmvb|rm|3gp)$/i.test(name);
+}
 
 function detectType(url) {
   if (!url) return "other";
   const u = String(url).toLowerCase();
-  if (u.includes("baidu.com") || u.includes("pan.baidu")) return "baidu";
-  if (u.includes("quark.cn") || u.includes("quark")) return "quark";
-  if (u.includes("aliyundrive") || u.includes("alipan") || u.includes("aliyun")) return "aliyun";
+  if (u.includes("baidu") || u.includes("pan.baidu")) return "baidu";
+  if (u.includes("quark")) return "quark";
+  if (u.includes("aliyun") || u.includes("alipan")) return "aliyun";
   if (u.includes("189.cn") || u.includes("cloud.189")) return "tianyi";
-  if (u.includes("115.com") || u.includes("anxia")) return "115";
-  if (u.includes("123pan") || u.includes("123yun") || /\/123/.test(u)) return "123";
-  if (u.includes("caiyun.139") || u.includes("139.com")) return "mobile";
-  if (u.includes("uc.cn") || u.includes("drive.uc")) return "uc";
+  if (u.includes("115.com")) return "115";
+  if (u.includes("123pan") || u.includes("123yun")) return "123";
+  if (u.includes("139.com") || u.includes("caiyun")) return "mobile";
+  if (u.includes("uc.cn")) return "uc";
   if (u.includes("xunlei") || u.includes("thunder")) return "xunlei";
   return "other";
 }
 
 async function searchPansou(keyword) {
   const url = `${PANSOU_API}/api/search`;
-  OmniBox.log("info", `[盘搜] 搜索 ${keyword} -> ${url}`);
+  OmniBox.log("info", `[盘搜] POST ${url} kw=${keyword}`);
 
   const res = await OmniBox.request(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      kw: keyword,
-      res: "merge",
-      src: "all",
-    }),
+    body: JSON.stringify({ kw: keyword, res: "merge", src: "all" }),
   });
 
   let body = res.body;
   if (typeof body === "string") {
-    try { body = JSON.parse(body); } catch (e) { body = {}; }
+    try { body = JSON.parse(body); } catch { body = {}; }
   }
-
-  // 兼容多种返回结构
-  const data = body?.data || body || {};
-  return data;
+  return body?.data || body || {};
 }
 
-async function home(params) {
-  return {
-    class: [{ type_id: "search", type_name: "搜索" }],
-    list: [],
-    filters: {},
-  };
+async function getAllVideoFiles(shareURL, files) {
+  const videoFiles = [];
+  for (const file of files || []) {
+    if (file.file && isVideoFile(file)) {
+      videoFiles.push(file);
+    } else if (file.dir) {
+      try {
+        const sub = await OmniBox.getDriveFileList(shareURL, file.fid);
+        if (sub?.files) {
+          const subVideos = await getAllVideoFiles(shareURL, sub.files);
+          videoFiles.push(...subVideos);
+        }
+      } catch (e) {
+        OmniBox.log("warn", `子目录失败: ${e.message}`);
+      }
+    }
+  }
+  return videoFiles;
 }
 
-async function category(params) {
+async function home() {
+  return { class: [], list: [], filters: {} };
+}
+
+async function category() {
   return { list: [], page: 1, pagecount: 0, total: 0 };
 }
 
 async function search(params) {
-  const keyword = (params.keyword || params.wd || params.key || "").trim();
+  const keyword = (params.keyword || params.wd || "").trim();
   const page = parseInt(params.page || "1", 10);
-
   if (!keyword || page > 1) {
     return { list: [], page, pagecount: 1, total: 0 };
   }
@@ -72,7 +84,6 @@ async function search(params) {
     const data = await searchPansou(keyword);
     const list = [];
 
-    // 优先使用 merged_by_type（推荐格式）
     const merged = data.merged_by_type || data.mergedByType || {};
     for (const [type, items] of Object.entries(merged)) {
       if (!Array.isArray(items)) continue;
@@ -89,11 +100,9 @@ async function search(params) {
       }
     }
 
-    // 如果没有 merged，再尝试 results
     if (list.length === 0 && Array.isArray(data.results)) {
       for (const item of data.results) {
-        const links = item.links || [];
-        for (const lk of links) {
+        for (const lk of item.links || []) {
           const url = lk.url || lk.link;
           if (!url) continue;
           list.push({
@@ -101,53 +110,112 @@ async function search(params) {
             vod_name: item.title || keyword,
             vod_pic: (item.images && item.images[0]) || "",
             vod_remarks: (lk.type || detectType(url)) + (lk.password ? ` 提取码:${lk.password}` : ""),
-            vod_tag: lk.type || detectType(url),
           });
         }
       }
     }
 
-    OmniBox.log("info", `[盘搜] 找到 ${list.length} 条`);
+    OmniBox.log("info", `[盘搜] 搜索到 ${list.length} 条`);
     return { list, page: 1, pagecount: 1, total: list.length };
   } catch (e) {
-    OmniBox.log("error", `[盘搜] 搜索失败: ${e.message || e}`);
+    OmniBox.log("error", `[盘搜] 搜索失败: ${e.message}`);
     return { list: [], page: 1, pagecount: 0, total: 0 };
   }
 }
 
 async function detail(params) {
-  const id = params.id || params.vod_id || "";
-  if (!id) return { list: [] };
+  const videoId = params.videoId || params.id || params.vod_id || "";
+  if (!videoId) return { list: [] };
 
-  const typ = detectType(id);
-  return {
-    list: [
-      {
-        vod_id: id,
-        vod_name: id.split("/").pop() || "分享链接",
-        vod_pic: "",
-        vod_remarks: typ,
-        vod_play_sources: [
-          {
-            name: typ,
-            episodes: [{ name: "打开分享链接", playId: id }],
-          },
-        ],
-      },
-    ],
-  };
+  const shareURL = videoId.split("|")[0];
+  if (!shareURL) return { list: [] };
+
+  OmniBox.log("info", `[detail] shareURL=${shareURL}`);
+
+  try {
+    const [driveInfo, fileList] = await Promise.all([
+      OmniBox.getDriveInfoByShareURL(shareURL),
+      OmniBox.getDriveFileList(shareURL, "0"),
+    ]);
+
+    if (!fileList?.files) {
+      throw new Error("获取文件列表失败");
+    }
+
+    const allVideoFiles = await getAllVideoFiles(shareURL, fileList.files);
+    OmniBox.log("info", `[detail] 视频文件数: ${allVideoFiles.length}`);
+
+    if (allVideoFiles.length === 0) {
+      throw new Error("未找到视频文件");
+    }
+
+    const episodes = allVideoFiles.map((file) => {
+      const fileId = file.fid || file.file_id || "";
+      const fileName = file.file_name || fileId;
+      return {
+        name: fileName,
+        playId: `${shareURL}|${fileId}`,
+        size: file.size || file.file_size || 0,
+      };
+    });
+
+    const displayName = driveInfo?.displayName || shareURL.split("/").pop() || "分享链接";
+
+    return {
+      list: [
+        {
+          vod_id: shareURL,
+          vod_name: displayName,
+          vod_pic: "",
+          vod_remarks: detectType(shareURL),
+          vod_play_sources: [
+            {
+              name: driveInfo?.displayName || detectType(shareURL),
+              episodes,
+            },
+          ],
+        },
+      ],
+    };
+  } catch (e) {
+    OmniBox.log("error", `[detail] ${e.message}`);
+    return { list: [] };
+  }
 }
 
 async function play(params) {
-  const url = params.playId || params.id || params.url || "";
-  if (!url) return { parse: 0, url: "" };
+  const playId = params.playId || "";
+  if (!playId) return { urls: [], header: {}, danmaku: [] };
 
-  // 直接返回分享链接，由 OmniBox 网盘模块解析
-  return {
-    parse: 0,
-    url: url,
-    header: {},
-  };
+  const parts = playId.split("|");
+  if (parts.length < 2) return { urls: [], header: {}, danmaku: [] };
+
+  const shareURL = parts[0];
+  const fileId = parts[1];
+
+  OmniBox.log("info", `[play] shareURL=${shareURL}, fileId=${fileId}`);
+
+  try {
+    const playInfo = await OmniBox.getDriveVideoPlayInfo(shareURL, fileId, "直连");
+    if (!playInfo?.url || !Array.isArray(playInfo.url) || playInfo.url.length === 0) {
+      throw new Error("无法获取播放地址");
+    }
+
+    const urls = playInfo.url.map((item) => ({
+      name: item.name || "播放",
+      url: item.url,
+    }));
+
+    return {
+      urls,
+      header: playInfo.header || {},
+      parse: 0,
+      danmaku: playInfo.danmaku || [],
+    };
+  } catch (e) {
+    OmniBox.log("error", `[play] ${e.message}`);
+    return { urls: [], header: {}, danmaku: [] };
+  }
 }
 
 module.exports = { home, category, search, detail, play };
