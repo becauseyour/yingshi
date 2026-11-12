@@ -1,7 +1,7 @@
 // @name 盘搜-精简
 // @author becauseyour
 // @description 对接本地盘搜API，仅保留115/百度/阿里/夸克，使用OmniBox网盘SDK解析播放
-// @version 1.4.2
+// @version 1.4.3
 
 const OmniBox = require("omnibox_sdk");
 
@@ -19,7 +19,8 @@ function isVideoFile(file) {
 function detectType(url) {
   if (!url) return "";
   const u = String(url).toLowerCase();
-  if (u.includes("115.com") || u.includes("115.com")) return "115";
+  // 115 识别放宽：包含 115 即可（兼容短链/其他域名）
+  if (u.includes("115")) return "115";
   if (u.includes("baidu") || u.includes("pan.baidu")) return "baidu";
   if (u.includes("aliyun") || u.includes("alipan") || u.includes("aliyundrive")) return "aliyun";
   if (u.includes("quark")) return "quark";
@@ -95,17 +96,22 @@ async function search(params) {
     const merged = data.merged_by_type || data.mergedByType || {};
     for (const [type, items] of Object.entries(merged)) {
       const t = String(type).toLowerCase();
-      if (!ALLOWED_TYPES.has(t)) continue;
+      // 兼容 API 返回的类型名
+      const normalized = t === "115" || t.includes("115") ? "115" :
+                         t.includes("baidu") ? "baidu" :
+                         t.includes("ali") ? "aliyun" :
+                         t.includes("quark") ? "quark" : t;
+      if (!ALLOWED_TYPES.has(normalized)) continue;
       if (!Array.isArray(items)) continue;
       for (const item of items) {
         const url = item.url || item.link;
-        if (!url || !isAllowed(url, t)) continue;
+        if (!url || !isAllowed(url, normalized)) continue;
         list.push({
           vod_id: url,
           vod_name: item.note || item.title || keyword,
           vod_pic: (item.images && item.images[0]) || "",
-          vod_remarks: t + (item.password ? ` 提取码:${item.password}` : ""),
-          vod_tag: t,
+          vod_remarks: normalized + (item.password ? ` 提取码:${item.password}` : ""),
+          vod_tag: normalized,
         });
       }
     }
@@ -115,13 +121,17 @@ async function search(params) {
         for (const lk of item.links || []) {
           const url = lk.url || lk.link;
           const t = (lk.type || detectType(url) || "").toLowerCase();
-          if (!url || !ALLOWED_TYPES.has(t)) continue;
+          const normalized = t.includes("115") ? "115" :
+                             t.includes("baidu") ? "baidu" :
+                             t.includes("ali") ? "aliyun" :
+                             t.includes("quark") ? "quark" : t;
+          if (!url || !ALLOWED_TYPES.has(normalized)) continue;
           list.push({
             vod_id: url,
             vod_name: item.title || keyword,
             vod_pic: (item.images && item.images[0]) || "",
-            vod_remarks: t + (lk.password ? ` 提取码:${lk.password}` : ""),
-            vod_tag: t,
+            vod_remarks: normalized + (lk.password ? ` 提取码:${lk.password}` : ""),
+            vod_tag: normalized,
           });
         }
       }
