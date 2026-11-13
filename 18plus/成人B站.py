@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # @name 成人B站
-# @version 1.1.1
+# @version 1.2.0
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/18plus/%E6%88%90%E4%BA%BAB%E7%AB%99.py
 # @description 成人B站（MacCMS API，OmniBox）
 
@@ -8,13 +8,14 @@
 成人B站 v1.1.0
 API: https://fqzy.me/api.php/provide/vod
 
-适配说明（相对 v1.1.0）：
-- 修复 v1.1.0 的 OmniBox.request 调用签名错误（改为第二参数传选项
-  字典，响应统一用 res.get("body")/res.get("statusCode") 读取），
-  该错误导致全部请求失败、首页/分类/搜索/详情均为空；
-- 其余适配点同 v1.1.0：参数名对齐框架约定、搜索 videolist/list 双
-  回退、删除已移除的站点解析与播放历史调用、播放直出直链、
-  头部元数据不含索引声明行。
+适配说明（相对 v1.1.1）：
+- API 域名多源回退：fqzy.me → fqzy.cc（实测 fanqiezy.com 已停放
+  弃用），任一域名返回有效数据即记住该域名，全部失败才返回空
+  （应对单域名被墙/DNS 污染导致列表为空）；
+- v1.1.1 已修复 OmniBox.request 调用签名（第二参数传选项字典，
+  响应用 res.get("body")/res.get("statusCode") 读取）；
+- 其余适配点同前：参数名对齐框架约定、搜索 videolist/list 双
+  回退、无已移除 SDK 调用、播放直出直链、无索引声明行。
 """
 
 import json
@@ -23,7 +24,11 @@ from urllib.parse import quote
 
 from spider_runner import OmniBox, run
 
-API = "https://fqzy.me/api.php/provide/vod"
+HOSTS = ["fqzy.me", "fqzy.cc"]
+_HOST = HOSTS[0]
+
+def _api(query):
+    return f"https://{_HOST}/api.php/provide/vod/?{query}"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
@@ -64,30 +69,43 @@ def _page(value, default=1):
         return default
 
 
-async def _get(url):
-    try:
-        res = await OmniBox.request(
-            url,
-            {
-                "method": "GET",
-                "headers": {"User-Agent": UA, "Accept": "application/json"},
-                "timeout": 12,
-            },
-        )
-        body = (res or {}).get("body") or ""
-        if (res or {}).get("statusCode") not in (None, 0, 200):
-            await OmniBox.log(
-                "error", f"[成人B站] HTTP {res.get('statusCode')}: {url}"
+async def _fetch(query):
+    """按域名顺序请求 API，成功即记住该域名；全部失败返回 {}"""
+    global _HOST
+    last_err = ""
+    for host in HOSTS:
+        _HOST = host
+        try:
+            res = await OmniBox.request(
+                _api(query),
+                {
+                    "method": "GET",
+                    "headers": {"User-Agent": UA, "Accept": "application/json"},
+                    "timeout": 12,
+                },
             )
-        if isinstance(body, str):
-            try:
-                return json.loads(body)
-            except Exception:
-                return {}
-        return body or {}
-    except Exception as e:
-        await OmniBox.log("error", f"[成人B站] request failed: {e}")
-        return {}
+            code = (res or {}).get("statusCode")
+            if code not in (None, 0, 200):
+                last_err = f"HTTP {code}"
+                await OmniBox.log("error", f"[成人B站] {host} {last_err}")
+                continue
+            body = (res or {}).get("body") or ""
+            if isinstance(body, str):
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    last_err = "json decode failed"
+                    continue
+            else:
+                data = body
+            if isinstance(data, dict) and data.get("list") is not None:
+                return data
+            last_err = "unexpected payload"
+        except Exception as e:
+            last_err = str(e)
+            await OmniBox.log("error", f"[成人B站] {host} request failed: {e}")
+    await OmniBox.log("error", f"[成人B站] all hosts failed, last={last_err}")
+    return {}
 
 
 def _item(v):
@@ -119,8 +137,7 @@ async def category(params, context):
         # 框架约定主传 categoryId，兼容旧的 type_id/tid 写法
         tid = str(p.get("categoryId") or p.get("type_id") or p.get("tid") or "7")
         page = _page(p.get("page"))
-        url = f"{API}/?ac=videolist&t={tid}&pg={page}"
-        data = await _get(url)
+        data = await _fetch(f"ac=videolist&t={tid}&pg={page}")
         items = data.get("list") or []
         list_ = _normalize_list(items)
         pagecount = _page(data.get("pagecount"), 1)
@@ -144,10 +161,10 @@ async def search(params, context):
         if not keyword:
             return {"list": [], "page": 1, "pagecount": 0, "total": 0}
         # 兼容部分 MacCMS 站点只支持 ac=list 搜索：videolist 无结果时回退一次
-        data = await _get(f"{API}/?ac=videolist&wd={quote(keyword)}&pg={page}")
+        data = await _fetch(f"ac=videolist&wd={quote(keyword)}&pg={page}")
         list_ = _normalize_list(data.get("list"))
         if not list_:
-            data = await _get(f"{API}/?ac=list&wd={quote(keyword)}&pg={page}")
+            data = await _fetch(f"ac=list&wd={quote(keyword)}&pg={page}")
             list_ = _normalize_list(data.get("list"))
         pagecount = _page(data.get("pagecount"), 1)
         return {
@@ -167,7 +184,7 @@ async def detail(params, context):
         vid = str(p.get("videoId") or p.get("id") or p.get("vod_id") or "").split("@@")[0].strip()
         if not vid:
             return {"list": []}
-        data = await _get(f"{API}/?ac=detail&ids={vid}")
+        data = await _fetch(f"ac=detail&ids={vid}")
         items = data.get("list") or []
         if not items:
             return {"list": []}
