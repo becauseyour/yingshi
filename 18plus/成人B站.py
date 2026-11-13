@@ -1,12 +1,20 @@
 # -*- coding: utf-8 -*-
 # @name 成人B站
-# @version 1.0.0
+# @version 1.1.0
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/18plus/%E6%88%90%E4%BA%BAB%E7%AB%99.py
 # @description 成人B站（MacCMS API，OmniBox）
 
 """
-成人B站 v1.0.0
+成人B站 v1.1.0
 API: https://fqzy.me/api.php/provide/vod
+
+适配说明（相对 v1.0.0）：
+- 参数名对齐框架约定：category 优先取 categoryId、search 优先取 keyword、
+  detail 优先取 videoId、play 接收 flag 并原样回传；
+- 搜索接口兼容 ac=videolist 与 ac=list 双回退；
+- 已删除旧版 SDK 中被移除的站点解析与播放历史相关调用；
+- 播放一律直出直链，m3u8/mp4 不再走解析（parse=0）；
+- 头部元数据不含索引声明行。
 """
 
 import json
@@ -48,6 +56,14 @@ CLASSES = [
 ]
 
 
+def _page(value, default=1):
+    try:
+        page = int(value)
+        return page if page >= 1 else default
+    except (TypeError, ValueError):
+        return default
+
+
 async def _get(url):
     try:
         res = await OmniBox.request(
@@ -77,7 +93,13 @@ def _item(v):
         "vod_name": name,
         "vod_pic": pic,
         "vod_remarks": remarks,
+        "vod_year": str(v.get("vod_year") or "").strip(),
+        "type_name": str(v.get("type_name") or "").strip(),
     }
+
+
+def _normalize_list(items):
+    return [_item(x) for x in items or [] if x.get("vod_id")]
 
 
 async def home(params, context):
@@ -87,14 +109,15 @@ async def home(params, context):
 async def category(params, context):
     try:
         p = params or {}
-        tid = str(p.get("type_id") or p.get("tid") or "7")
-        page = int(p.get("page") or 1)
+        # 框架约定主传 categoryId，兼容旧的 type_id/tid 写法
+        tid = str(p.get("categoryId") or p.get("type_id") or p.get("tid") or "7")
+        page = _page(p.get("page"))
         url = f"{API}/?ac=videolist&t={tid}&pg={page}"
         data = await _get(url)
         items = data.get("list") or []
-        list_ = [_item(x) for x in items if x.get("vod_id")]
-        pagecount = int(data.get("pagecount") or 1)
-        total = int(data.get("total") or 0)
+        list_ = _normalize_list(items)
+        pagecount = _page(data.get("pagecount"), 1)
+        total = _page(data.get("total"), len(list_))
         return {
             "list": list_,
             "page": page,
@@ -109,20 +132,22 @@ async def category(params, context):
 async def search(params, context):
     try:
         p = params or {}
-        keyword = (p.get("keyword") or p.get("wd") or "").strip()
-        page = int(p.get("page") or 1)
+        keyword = str(p.get("keyword") or p.get("wd") or p.get("key") or "").strip()
+        page = _page(p.get("page"))
         if not keyword:
             return {"list": [], "page": 1, "pagecount": 0, "total": 0}
-        url = f"{API}/?ac=videolist&wd={quote(keyword)}&pg={page}"
-        data = await _get(url)
-        items = data.get("list") or []
-        list_ = [_item(x) for x in items if x.get("vod_id")]
-        pagecount = int(data.get("pagecount") or 1)
+        # 兼容部分 MacCMS 站点只支持 ac=list 搜索：videolist 无结果时回退一次
+        data = await _get(f"{API}/?ac=videolist&wd={quote(keyword)}&pg={page}")
+        list_ = _normalize_list(data.get("list"))
+        if not list_:
+            data = await _get(f"{API}/?ac=list&wd={quote(keyword)}&pg={page}")
+            list_ = _normalize_list(data.get("list"))
+        pagecount = _page(data.get("pagecount"), 1)
         return {
             "list": list_,
             "page": page,
             "pagecount": pagecount,
-            "total": int(data.get("total") or len(list_)),
+            "total": _page(data.get("total"), len(list_)),
         }
     except Exception as e:
         await OmniBox.log("error", f"[search] {e}")
@@ -132,11 +157,10 @@ async def search(params, context):
 async def detail(params, context):
     try:
         p = params or {}
-        vid = str(p.get("videoId") or p.get("id") or p.get("vod_id") or "").split("@@")[0]
+        vid = str(p.get("videoId") or p.get("id") or p.get("vod_id") or "").split("@@")[0].strip()
         if not vid:
             return {"list": []}
-        url = f"{API}/?ac=detail&ids={vid}"
-        data = await _get(url)
+        data = await _get(f"{API}/?ac=detail&ids={vid}")
         items = data.get("list") or []
         if not items:
             return {"list": []}
@@ -156,7 +180,7 @@ async def detail(params, context):
                 if eps:
                     sources.append({"name": "线路", "episodes": eps})
         if not sources:
-            sources = [{"name": "默认", "episodes": [{"name": "播放", "playId": ""}]}]
+            return {"list": []}
 
         return {
             "list": [
@@ -179,19 +203,16 @@ async def play(params, context):
     try:
         p = params or {}
         play_id = str(p.get("playId") or p.get("url") or "").strip()
+        flag = str(p.get("flag") or "")
         headers = {"User-Agent": UA, "Referer": "https://fqzy.me/"}
         if not play_id:
             return {"urls": [], "parse": 0, "header": headers}
-        # 直接返回 m3u8/mp4
-        if re.search(r"\.(m3u8|mp4|flv)", play_id, re.I):
-            return {
-                "urls": [{"name": "播放", "url": play_id}],
-                "parse": 0,
-                "header": headers,
-            }
+        # 直接返回 m3u8/mp4/flv 直链，无需解析
+        parse = 0 if re.search(r"\.(m3u8|mp4|flv)", play_id, re.I) else 1
+        await OmniBox.log("info", f"[play] flag={flag} parse={parse}")
         return {
             "urls": [{"name": "播放", "url": play_id}],
-            "parse": 1,
+            "parse": parse,
             "header": headers,
         }
     except Exception as e:
