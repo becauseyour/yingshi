@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # @name 成人B站
-# @version 1.0.3
+# @version 1.0.4
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/18plus/%E6%88%90%E4%BA%BAB%E7%AB%99.py
 # @description 成人B站（MacCMS API，OmniBox）
 
@@ -40,17 +40,22 @@ CLASSES = [
 
 async def _get_json(url):
     try:
-        res = await OmniBox.request(url, method="GET", headers={"User-Agent": UA, "Accept": "application/json,text/plain,*/*"})
-        body = getattr(res, "body", None)
-        if body is None:
-            body = getattr(res, "text", None) or getattr(res, "data", None)
+        res = await OmniBox.request(
+            url,
+            {
+                "method": "GET",
+                "headers": {"User-Agent": UA, "Accept": "application/json,text/plain,*/*"},
+                "timeout": 15,
+            },
+        )
+        body = res.get("body") if isinstance(res, dict) else getattr(res, "body", None)
         if isinstance(body, (dict, list)):
             return body if isinstance(body, dict) else {"list": body}
         if isinstance(body, str):
             body = body.strip()
             if body.startswith("{") or body.startswith("["):
                 return json.loads(body)
-        await OmniBox.log("warn", f"[成人B站] unexpected body type: {type(body)}")
+        await OmniBox.log("warn", f"[成人B站] unexpected body: {type(body)} len={len(str(body or ''))}")
         return {}
     except Exception as e:
         await OmniBox.log("error", f"[成人B站] request failed: {e}")

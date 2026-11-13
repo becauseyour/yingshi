@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # @name 爆色
-# @version 1.0.3
+# @version 1.0.4
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/18plus/%E7%88%86%E8%89%B2.py
 # @description 爆色 BaoPorn（OmniBox）
 
@@ -29,10 +29,19 @@ CAT_MAP = {cid: path for cid, _, path in CATS}
 
 async def _get(url):
     try:
-        res = await OmniBox.request(url, method="GET", headers={"User-Agent": UA, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Accept-Language": "zh-CN,zh;q=0.9"})
-        body = getattr(res, "body", None)
-        if body is None:
-            body = getattr(res, "text", None) or ""
+        res = await OmniBox.request(
+            url,
+            {
+                "method": "GET",
+                "headers": {
+                    "User-Agent": UA,
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "zh-CN,zh;q=0.9",
+                },
+                "timeout": 15,
+            },
+        )
+        body = res.get("body") if isinstance(res, dict) else getattr(res, "body", None)
         return body if isinstance(body, str) else str(body or "")
     except Exception as e:
         await OmniBox.log("error", f"[爆色] get failed: {e}")
