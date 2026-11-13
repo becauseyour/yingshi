@@ -7,7 +7,6 @@
 """
 爆色 v1.0.0
 主站: https://baoporn.com
-注意: 部分路径返回 404 但内容仍可用
 """
 
 import base64
@@ -34,7 +33,6 @@ CATS = [
 ]
 CAT_MAP = {cid: path for cid, _, path in CATS}
 
-
 async def _get(url):
     try:
         res = await OmniBox.request(
@@ -51,7 +49,6 @@ async def _get(url):
         await OmniBox.log("error", f"[爆色] get failed: {e}")
         return ""
 
-
 def _decrypt(encoded):
     try:
         s = encoded[::-1]
@@ -61,7 +58,6 @@ def _decrypt(encoded):
         return base64.b64decode(s).decode("utf-8", errors="replace")
     except Exception:
         return ""
-
 
 def _parse_cards(html):
     items = []
@@ -87,11 +83,9 @@ def _parse_cards(html):
         })
     return items
 
-
 async def home(params, context):
     classes = [{"type_id": cid, "type_name": name} for cid, name, _ in CATS]
     return {"class": classes, "list": [], "filters": {}}
-
 
 async def category(params, context):
     try:
@@ -106,7 +100,6 @@ async def category(params, context):
     except Exception as e:
         await OmniBox.log("error", f"[category] {e}")
         return {"list": [], "page": 1, "pagecount": 0, "total": 0}
-
 
 async def search(params, context):
     try:
@@ -124,7 +117,6 @@ async def search(params, context):
     except Exception as e:
         await OmniBox.log("error", f"[search] {e}")
         return {"list": [], "page": 1, "pagecount": 0, "total": 0}
-
 
 async def detail(params, context):
     try:
@@ -164,7 +156,6 @@ async def detail(params, context):
         await OmniBox.log("error", f"[detail] {e}")
         return {"list": []}
 
-
 async def play(params, context):
     try:
         p = params or {}
@@ -176,7 +167,6 @@ async def play(params, context):
     except Exception as e:
         await OmniBox.log("error", f"[play] {e}")
         return {"urls": [], "parse": 0, "header": {}}
-
 
 if __name__ == "__main__":
     run({"home": home, "category": category, "detail": detail, "search": search, "play": play})
