@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # @name 成人B站
-# @version 1.1.0
+# @version 1.1.1
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/18plus/%E6%88%90%E4%BA%BAB%E7%AB%99.py
 # @description 成人B站（MacCMS API，OmniBox）
 
@@ -8,13 +8,13 @@
 成人B站 v1.1.0
 API: https://fqzy.me/api.php/provide/vod
 
-适配说明（相对 v1.0.0）：
-- 参数名对齐框架约定：category 优先取 categoryId、search 优先取 keyword、
-  detail 优先取 videoId、play 接收 flag 并原样回传；
-- 搜索接口兼容 ac=videolist 与 ac=list 双回退；
-- 已删除旧版 SDK 中被移除的站点解析与播放历史相关调用；
-- 播放一律直出直链，m3u8/mp4 不再走解析（parse=0）；
-- 头部元数据不含索引声明行。
+适配说明（相对 v1.1.0）：
+- 修复 v1.1.0 的 OmniBox.request 调用签名错误（改为第二参数传选项
+  字典，响应统一用 res.get("body")/res.get("statusCode") 读取），
+  该错误导致全部请求失败、首页/分类/搜索/详情均为空；
+- 其余适配点同 v1.1.0：参数名对齐框架约定、搜索 videolist/list 双
+  回退、删除已移除的站点解析与播放历史调用、播放直出直链、
+  头部元数据不含索引声明行。
 """
 
 import json
@@ -68,10 +68,17 @@ async def _get(url):
     try:
         res = await OmniBox.request(
             url,
-            method="GET",
-            headers={"User-Agent": UA, "Accept": "application/json"},
+            {
+                "method": "GET",
+                "headers": {"User-Agent": UA, "Accept": "application/json"},
+                "timeout": 12,
+            },
         )
-        body = res.body
+        body = (res or {}).get("body") or ""
+        if (res or {}).get("statusCode") not in (None, 0, 200):
+            await OmniBox.log(
+                "error", f"[成人B站] HTTP {res.get('statusCode')}: {url}"
+            )
         if isinstance(body, str):
             try:
                 return json.loads(body)
