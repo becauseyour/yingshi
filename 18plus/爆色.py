@@ -1,18 +1,13 @@
 # -*- coding: utf-8 -*-
 # @name 爆色
-# @version 1.0.1
+# @version 1.0.2
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/18plus/%E7%88%86%E8%89%B2.py
 # @description 爆色 BaoPorn（OmniBox）
 
-"""
-爆色 v1.0.1
-主站: https://baoporn.com
-"""
-
 import base64
 import re
+import asyncio
 from urllib.parse import quote
-
 from spider_runner import OmniBox, run
 
 HOST = "https://baoporn.com"
@@ -35,15 +30,7 @@ CAT_MAP = {cid: path for cid, _, path in CATS}
 
 async def _get(url):
     try:
-        res = await OmniBox.request(
-            url,
-            method="GET",
-            headers={
-                "User-Agent": UA,
-                "Accept": "text/html,application/xhtml+xml",
-                "Accept-Language": "zh-CN,zh;q=0.9",
-            },
-        )
+        res = await OmniBox.request(url, method="GET", headers={"User-Agent": UA, "Accept": "text/html,application/xhtml+xml", "Accept-Language": "zh-CN,zh;q=0.9"})
         return res.body or ""
     except Exception as e:
         await OmniBox.log("error", f"[爆色] get failed: {e}")
@@ -53,8 +40,7 @@ def _decrypt(encoded):
     try:
         s = encoded[::-1]
         pad = len(s) % 4
-        if pad:
-            s += "=" * (4 - pad)
+        if pad: s += "=" * (4 - pad)
         return base64.b64decode(s).decode("utf-8", errors="replace")
     except Exception:
         return ""
@@ -64,8 +50,7 @@ def _parse_cards(html):
     parts = (html or "").split('class="video-card group"')
     for part in parts[1:]:
         m = re.search(r'href="/video/([A-Za-z0-9]+)"', part)
-        if not m:
-            continue
+        if not m: continue
         vid = m.group(1)
         m2 = re.search(r'<img src="([^"]+)" alt="([^"]*)"', part)
         pic = m2.group(1) if m2 else ""
@@ -75,20 +60,26 @@ def _parse_cards(html):
             title = m3.group(1).strip() if m3 else vid
         m4 = re.search(r'right-1 bg-black[^>]*>([^<]+)</span>', part)
         duration = m4.group(1) if m4 else ""
-        items.append({
-            "vod_id": vid,
-            "vod_name": title,
-            "vod_pic": pic,
-            "vod_remarks": duration,
-        })
+        items.append({"vod_id": vid, "vod_name": title, "vod_pic": pic, "vod_remarks": duration})
     return items
 
 async def home(params, context):
     classes = [{"type_id": cid, "type_name": name} for cid, name, _ in CATS]
     try:
-        html = await _get(f"{HOST}/video")
-        items = _parse_cards(html)
-        return {"class": classes, "list": items, "filters": {}}
+        top = CATS[:5]
+        async def load_one(cid, name, path):
+            url = f"{HOST}/{path}"
+            html = await _get(url)
+            items = _parse_cards(html)
+            for it in items[:6]:
+                it["vod_remarks"] = f"[{name}] {it.get('vod_remarks') or ''}".strip()
+            return items[:6]
+        results = await asyncio.gather(*[load_one(cid, name, path) for cid, name, path in top], return_exceptions=True)
+        list_ = []
+        for r in results:
+            if isinstance(r, list):
+                list_.extend(r)
+        return {"class": classes, "list": list_, "filters": {}}
     except Exception as e:
         await OmniBox.log("error", f"[home] {e}")
         return {"class": classes, "list": [], "filters": {}}
@@ -112,11 +103,9 @@ async def search(params, context):
         p = params or {}
         keyword = (p.get("keyword") or "").strip()
         page = int(p.get("page") or 1)
-        if not keyword:
-            return {"list": [], "page": 1, "pagecount": 0, "total": 0}
+        if not keyword: return {"list": [], "page": 1, "pagecount": 0, "total": 0}
         url = f"{HOST}/search?q={quote(keyword)}"
-        if page > 1:
-            url += f"&page={page}"
+        if page > 1: url += f"&page={page}"
         html = await _get(url)
         items = _parse_cards(html)
         return {"list": items, "page": page, "pagecount": page + (1 if items else 0), "total": len(items)}
@@ -128,36 +117,19 @@ async def detail(params, context):
     try:
         p = params or {}
         vid = str(p.get("videoId") or p.get("id") or "").strip()
-        if not vid:
-            return {"list": []}
+        if not vid: return {"list": []}
         html = await _get(f"{HOST}/video/{vid}")
         title = ""
         m = re.search(r"<h1[^>]*>([^<]+)</h1>", html)
-        if m:
-            title = m.group(1).strip()
+        if m: title = m.group(1).strip()
         pic = ""
         m = re.search(r'<meta property="og:image" content="([^"]+)"', html)
-        if m:
-            pic = m.group(1)
+        if m: pic = m.group(1)
         play_url = ""
         m = re.search(r'data-url="([^"]+)"', html)
-        if m:
-            play_url = _decrypt(m.group(1))
-        if not play_url:
-            return {"list": []}
-        return {
-            "list": [
-                {
-                    "vod_id": vid,
-                    "vod_name": title or vid,
-                    "vod_pic": pic,
-                    "vod_remarks": "MP4",
-                    "vod_play_sources": [
-                        {"name": "BaoPorn", "episodes": [{"name": "播放", "playId": play_url}]}
-                    ],
-                }
-            ]
-        }
+        if m: play_url = _decrypt(m.group(1))
+        if not play_url: return {"list": []}
+        return {"list": [{"vod_id": vid, "vod_name": title or vid, "vod_pic": pic, "vod_remarks": "MP4", "vod_play_sources": [{"name": "BaoPorn", "episodes": [{"name": "播放", "playId": play_url}]}]}]}
     except Exception as e:
         await OmniBox.log("error", f"[detail] {e}")
         return {"list": []}
@@ -167,8 +139,7 @@ async def play(params, context):
         p = params or {}
         url = str(p.get("playId") or "").strip()
         headers = {"User-Agent": UA, "Referer": HOST + "/"}
-        if not url:
-            return {"urls": [], "parse": 0, "header": headers}
+        if not url: return {"urls": [], "parse": 0, "header": headers}
         return {"urls": [{"name": "播放", "url": url}], "parse": 0, "header": headers}
     except Exception as e:
         await OmniBox.log("error", f"[play] {e}")

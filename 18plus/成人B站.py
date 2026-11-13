@@ -1,25 +1,17 @@
 # -*- coding: utf-8 -*-
 # @name 成人B站
-# @version 1.0.1
+# @version 1.0.2
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/18plus/%E6%88%90%E4%BA%BAB%E7%AB%99.py
 # @description 成人B站（MacCMS API，OmniBox）
 
-"""
-成人B站 v1.0.1
-API: https://fqzy.me/api.php/provide/vod
-"""
-
 import json
 import re
+import asyncio
 from urllib.parse import quote
-
 from spider_runner import OmniBox, run
 
 API = "https://fqzy.me/api.php/provide/vod"
-UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-)
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 
 CLASSES = [
     {"type_id": "7", "type_name": "国产大制作"},
@@ -49,17 +41,11 @@ CLASSES = [
 
 async def _get(url):
     try:
-        res = await OmniBox.request(
-            url,
-            method="GET",
-            headers={"User-Agent": UA, "Accept": "application/json"},
-        )
+        res = await OmniBox.request(url, method="GET", headers={"User-Agent": UA, "Accept": "application/json"})
         body = res.body
         if isinstance(body, str):
-            try:
-                return json.loads(body)
-            except Exception:
-                return {}
+            try: return json.loads(body)
+            except Exception: return {}
         return body or {}
     except Exception as e:
         await OmniBox.log("error", f"[成人B站] request failed: {e}")
@@ -70,20 +56,27 @@ def _item(v):
     name = (v.get("vod_name") or "").strip()
     pic = (v.get("vod_pic") or "").strip()
     remarks = (v.get("vod_remarks") or v.get("type_name") or "").strip()
-    return {
-        "vod_id": vid,
-        "vod_name": name,
-        "vod_pic": pic,
-        "vod_remarks": remarks,
-    }
+    return {"vod_id": vid, "vod_name": name, "vod_pic": pic, "vod_remarks": remarks}
 
 async def home(params, context):
     try:
-        # 首页直接拉第一个分类的列表，避免空列表
-        url = f"{API}/?ac=videolist&t=7&pg=1"
-        data = await _get(url)
-        items = data.get("list") or []
-        list_ = [_item(x) for x in items if x.get("vod_id")]
+        top_cats = CLASSES[:6]
+        async def load_one(c):
+            url = f"{API}/?ac=videolist&t={c['type_id']}&pg=1"
+            data = await _get(url)
+            items = data.get("list") or []
+            out = []
+            for x in items[:8]:
+                if not x.get("vod_id"): continue
+                it = _item(x)
+                it["vod_remarks"] = f"[{c['type_name']}] {it.get('vod_remarks') or ''}".strip()
+                out.append(it)
+            return out
+        results = await asyncio.gather(*[load_one(c) for c in top_cats], return_exceptions=True)
+        list_ = []
+        for r in results:
+            if isinstance(r, list):
+                list_.extend(r)
         return {"class": CLASSES, "list": list_, "filters": {}}
     except Exception as e:
         await OmniBox.log("error", f"[home] {e}")
@@ -100,12 +93,7 @@ async def category(params, context):
         list_ = [_item(x) for x in items if x.get("vod_id")]
         pagecount = int(data.get("pagecount") or 1)
         total = int(data.get("total") or 0)
-        return {
-            "list": list_,
-            "page": page,
-            "pagecount": pagecount,
-            "total": total,
-        }
+        return {"list": list_, "page": page, "pagecount": pagecount, "total": total}
     except Exception as e:
         await OmniBox.log("error", f"[category] {e}")
         return {"list": [], "page": 1, "pagecount": 0, "total": 0}
@@ -122,12 +110,7 @@ async def search(params, context):
         items = data.get("list") or []
         list_ = [_item(x) for x in items if x.get("vod_id")]
         pagecount = int(data.get("pagecount") or 1)
-        return {
-            "list": list_,
-            "page": page,
-            "pagecount": pagecount,
-            "total": int(data.get("total") or len(list_)),
-        }
+        return {"list": list_, "page": page, "pagecount": pagecount, "total": int(data.get("total") or len(list_))}
     except Exception as e:
         await OmniBox.log("error", f"[search] {e}")
         return {"list": [], "page": 1, "pagecount": 0, "total": 0}
@@ -136,13 +119,11 @@ async def detail(params, context):
     try:
         p = params or {}
         vid = str(p.get("videoId") or p.get("id") or p.get("vod_id") or "").split("@@")[0]
-        if not vid:
-            return {"list": []}
+        if not vid: return {"list": []}
         url = f"{API}/?ac=detail&ids={vid}"
         data = await _get(url)
         items = data.get("list") or []
-        if not items:
-            return {"list": []}
+        if not items: return {"list": []}
         v = items[0]
         play_url = v.get("vod_play_url") or ""
         sources = []
@@ -158,19 +139,7 @@ async def detail(params, context):
                     sources.append({"name": "线路", "episodes": eps})
         if not sources:
             sources = [{"name": "默认", "episodes": [{"name": "播放", "playId": ""}]}]
-
-        return {
-            "list": [
-                {
-                    "vod_id": vid,
-                    "vod_name": v.get("vod_name") or vid,
-                    "vod_pic": v.get("vod_pic") or "",
-                    "vod_content": v.get("vod_content") or "",
-                    "vod_remarks": v.get("vod_remarks") or v.get("type_name") or "",
-                    "vod_play_sources": sources,
-                }
-            ]
-        }
+        return {"list": [{"vod_id": vid, "vod_name": v.get("vod_name") or vid, "vod_pic": v.get("vod_pic") or "", "vod_content": v.get("vod_content") or "", "vod_remarks": v.get("vod_remarks") or v.get("type_name") or "", "vod_play_sources": sources}]}
     except Exception as e:
         await OmniBox.log("error", f"[detail] {e}")
         return {"list": []}
@@ -180,19 +149,10 @@ async def play(params, context):
         p = params or {}
         play_id = str(p.get("playId") or p.get("url") or "").strip()
         headers = {"User-Agent": UA, "Referer": "https://fqzy.me/"}
-        if not play_id:
-            return {"urls": [], "parse": 0, "header": headers}
+        if not play_id: return {"urls": [], "parse": 0, "header": headers}
         if re.search(r"\.(m3u8|mp4|flv)", play_id, re.I):
-            return {
-                "urls": [{"name": "播放", "url": play_id}],
-                "parse": 0,
-                "header": headers,
-            }
-        return {
-            "urls": [{"name": "播放", "url": play_id}],
-            "parse": 1,
-            "header": headers,
-        }
+            return {"urls": [{"name": "播放", "url": play_id}], "parse": 0, "header": headers}
+        return {"urls": [{"name": "播放", "url": play_id}], "parse": 1, "header": headers}
     except Exception as e:
         await OmniBox.log("error", f"[play] {e}")
         return {"urls": [], "parse": 0, "header": {}}
