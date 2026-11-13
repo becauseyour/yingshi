@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 # @name 成人B站
-# @version 1.0.0
+# @version 1.0.1
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/18plus/%E6%88%90%E4%BA%BAB%E7%AB%99.py
 # @description 成人B站（MacCMS API，OmniBox）
 
 """
-成人B站 v1.0.0
+成人B站 v1.0.1
 API: https://fqzy.me/api.php/provide/vod
 """
 
@@ -78,12 +78,21 @@ def _item(v):
     }
 
 async def home(params, context):
-    return {"class": CLASSES, "list": [], "filters": {}}
+    try:
+        # 首页直接拉第一个分类的列表，避免空列表
+        url = f"{API}/?ac=videolist&t=7&pg=1"
+        data = await _get(url)
+        items = data.get("list") or []
+        list_ = [_item(x) for x in items if x.get("vod_id")]
+        return {"class": CLASSES, "list": list_, "filters": {}}
+    except Exception as e:
+        await OmniBox.log("error", f"[home] {e}")
+        return {"class": CLASSES, "list": [], "filters": {}}
 
 async def category(params, context):
     try:
         p = params or {}
-        tid = str(p.get("type_id") or p.get("tid") or "7")
+        tid = str(p.get("categoryId") or p.get("type_id") or p.get("tid") or "7")
         page = int(p.get("page") or 1)
         url = f"{API}/?ac=videolist&t={tid}&pg={page}"
         data = await _get(url)

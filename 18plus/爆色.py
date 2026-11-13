@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 # @name 爆色
-# @version 1.0.0
+# @version 1.0.1
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/18plus/%E7%88%86%E8%89%B2.py
 # @description 爆色 BaoPorn（OmniBox）
 
 """
-爆色 v1.0.0
+爆色 v1.0.1
 主站: https://baoporn.com
 """
 
@@ -85,12 +85,18 @@ def _parse_cards(html):
 
 async def home(params, context):
     classes = [{"type_id": cid, "type_name": name} for cid, name, _ in CATS]
-    return {"class": classes, "list": [], "filters": {}}
+    try:
+        html = await _get(f"{HOST}/video")
+        items = _parse_cards(html)
+        return {"class": classes, "list": items, "filters": {}}
+    except Exception as e:
+        await OmniBox.log("error", f"[home] {e}")
+        return {"class": classes, "list": [], "filters": {}}
 
 async def category(params, context):
     try:
         p = params or {}
-        tid = str(p.get("type_id") or p.get("tid") or "1")
+        tid = str(p.get("categoryId") or p.get("type_id") or p.get("tid") or "1")
         page = int(p.get("page") or 1)
         path = CAT_MAP.get(tid, "video")
         url = f"{HOST}/{path}" if page <= 1 else f"{HOST}/{path}/page/{page}"
