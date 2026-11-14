@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # @name 草莓视频
-# @version 1.0.0
+# @version 1.0.1
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/18plus/%E8%8D%89%E8%8E%93%E8%A7%86%E9%A2%91.py
 # @description 草莓视频（OmniBox，AES解密）
 
@@ -27,6 +27,17 @@ CLASSES = [
 ]
 
 def _aes_decrypt(data):
+    """AES-CBC解密，优先 cryptography"""
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        dec = Cipher(algorithms.AES(AES_KEY), modes.CBC(AES_IV)).decryptor()
+        plain = dec.update(data) + dec.finalize()
+        pad = plain[-1]
+        if 1 <= pad <= 16:
+            plain = plain[:-pad]
+        return plain
+    except Exception:
+        pass
     try:
         from Crypto.Cipher import AES
         c = AES.new(AES_KEY, AES.MODE_CBC, AES_IV)
@@ -37,16 +48,7 @@ def _aes_decrypt(data):
         return plain
     except Exception:
         pass
-    try:
-        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-        dec = Cipher(algorithms.AES(AES_KEY), modes.CBC(AES_IV)).decryptor()
-        plain = dec.update(data) + dec.finalize()
-        pad = plain[-1]
-        if 1 <= pad <= 16:
-            plain = plain[:-pad]
-        return plain
-    except Exception:
-        return b""
+    return b""
 
 async def _api(path):
     try:
@@ -62,6 +64,9 @@ async def _api(path):
             if body.startswith("{") or body.startswith("["):
                 return json.loads(body)
             try:
+                pad = len(body) % 4
+                if pad:
+                    body += "=" * (4 - pad)
                 raw = base64.b64decode(body)
                 plain = _aes_decrypt(raw)
                 if plain:
