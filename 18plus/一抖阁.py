@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # @name 一抖阁
-# @version 1.0.0
+# @version 1.0.1
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/18plus/%E4%B8%80%E6%8A%96%E9%98%81.py
 # @description 一抖阁（OmniBox）
 
@@ -13,11 +13,27 @@ HOST = "https://yidouge.vip"
 UA = "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
 CATS = [
+    {"type_id": HOST + "/v1/%E5%9B%BD%E4%BA%A7/", "type_name": "国产"},
+    {"type_id": HOST + "/v1/%E6%97%A5%E9%9F%A9/", "type_name": "日韩"},
+    {"type_id": HOST + "/v1/%E6%AC%A7%E7%BE%8E/", "type_name": "欧美"},
+    {"type_id": HOST + "/v1/%E7%BB%BF%E5%B8%BDNTR/", "type_name": "绿帽NTR"},
+    {"type_id": HOST + "/v1/%E8%B0%83%E6%95%99SM/", "type_name": "调教SM"},
+    {"type_id": HOST + "/v1/%E9%87%8C%E7%95%AA/", "type_name": "里番"},
+    {"type_id": HOST + "/v1/91%E5%A4%A7%E7%A5%9E/", "type_name": "91大神"},
+    {"type_id": HOST + "/v1/%E5%9B%BD%E4%BA%A7%E8%AE%A2%E9%98%85%E5%8D%9A%E4%B8%BB/", "type_name": "国产订阅博主"},
+    {"type_id": HOST + "/v1/%E6%AC%A7%E7%BE%8E%E8%AE%A2%E9%98%85%E5%8D%9A%E4%B8%BB/", "type_name": "欧美订阅博主"},
     {"type_id": HOST + "/v2/ai%E7%9F%AD%E5%89%A7/", "type_name": "AI短剧"},
     {"type_id": HOST + "/v2/%E7%BB%BF%E5%B8%BDntr/", "type_name": "伦理绿帽NTR"},
-    {"type_id": HOST + "/v2/%E9%83%BD%E5%B8%82/", "type_name": "现代"},
+    {"type_id": HOST + "/v2/%E9%83%BD%E5%B8%82/", "type_name": "都市"},
     {"type_id": HOST + "/v2/%E5%8F%A4%E8%A3%85/", "type_name": "古装"},
     {"type_id": HOST + "/v2/pmv/", "type_name": "PMV"},
+    {"type_id": HOST + "/v2/%E6%A0%A1%E5%9B%AD/", "type_name": "校园"},
+    {"type_id": HOST + "/v2/%E7%86%9F%E5%A5%B3/", "type_name": "熟女"},
+    {"type_id": HOST + "/v2/%E7%BA%AF%E7%88%B1/", "type_name": "纯爱"},
+    {"type_id": HOST + "/v2/%E8%81%8C%E5%9C%BA/", "type_name": "职场"},
+    {"type_id": HOST + "/v2/%E4%BF%AE%E4%BB%99/", "type_name": "修仙"},
+    {"type_id": HOST + "/v2/%E7%A9%BF%E8%B6%8A/", "type_name": "穿越"},
+    {"type_id": HOST + "/v2/%E9%87%8D%E7%94%9F/", "type_name": "重生"},
 ]
 
 async def _get(url):
