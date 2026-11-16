@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # @name 低端影视
-# @version 1.0.0
-# @description 低端影视 m.ddys.net（OmniBox）：分类筛选/搜索/多线路播放
+# @version 1.0.1
+# @description 低端影视 m.ddys.net（OmniBox）：强制移动端 UA 以支持 PC/移动端客户端；分类筛选/搜索/多线路播放
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/%E7%94%B5%E5%BD%B1%E7%94%B5%E8%A7%86/低端影视.py
 import html
 import json
@@ -11,9 +11,14 @@ from urllib.parse import quote, unquote
 from spider_runner import OmniBox, run
 
 HOST = "https://m.ddys.net"
+# 站点对 PC UA 返回 404，必须强制使用移动端 UA（兼容 PC 与移动端 OmniBox 客户端）
 UA = (
     "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
+)
+PC_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
 CLASSES = [
