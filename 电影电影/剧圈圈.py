@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # @name 剧圈圈
-# @version 1.0.0
+# @version 1.0.2
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/%E7%94%B5%E5%BD%B1%E7%94%B5%E8%A7%86/剧圈圈.py
-# @description 剧圈圈在线站源（OmniBox 适配版）：移动端 UA、suggest 搜索、jx/api 解密直链
+# @description 剧圈圈在线站源（OmniBox 适配版）：强制移动端 UA 以支持 PC/移动端客户端、suggest 搜索、jx/api 解密直链
 
 """
-剧圈圈 (jqqzx.one) — OmniBox 适配版
-必须使用移动端 UA（PC UA 会被 404）
+剧圈圈 (jqqzx.me / jqqzx.top 等) — OmniBox 适配版
+必须强制使用移动端 UA（PC UA 会被 404）。已内置强制，PC 端 OmniBox 客户端亦可正常使用。
 播放链路: player_aaaa vid → POST /jx/api.php → sign 解密直链
 """
 
@@ -19,9 +19,12 @@ from urllib.parse import quote, urlencode
 from spider_runner import OmniBox, run
 
 HOSTS = [
+    "https://www.jqqzx.me",
+    "https://www.jqqzx.top",
+    "https://www.jqqzx.xyz",
+    "https://jqqzx.me",
     "https://www.jqqzx.one",
     "https://www.jqqzx.cc",
-    "https://jqqzx.cc",
 ]
 HOST = HOSTS[0]
 UA = (
