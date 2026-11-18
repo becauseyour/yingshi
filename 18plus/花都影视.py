@@ -41,6 +41,13 @@ async def _get(url):
                 u = url.replace(_host, h, 1)
             res = await OmniBox.request(u, {"method": "GET", "headers": {"User-Agent": UA, "Referer": h + "/"}, "timeout": 12})
             body = res.get("body") or ""
+            if isinstance(body, bytes):
+                for enc in ("utf-8", "gbk", "gb2312"):
+                    try:
+                        body = body.decode(enc)
+                        break
+                    except Exception:
+                        body = body.decode("utf-8", "ignore")
             if body and len(body) > 300 and ("花都" in body or "voddetail" in body or "stui" in body):
                 _host = h
                 return body
