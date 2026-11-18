@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # @name 花都影视
-# @version 1.0.0
+# @version 1.0.1
 # @downloadURL https://raw.githubusercontent.com/becauseyour/yingshi/main/18plus/花都影视.py
 # @description 花都影视（OmniBox）多域名
 
